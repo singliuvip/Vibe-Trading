@@ -41,10 +41,43 @@ agents:
       - RSI: current value, regime (overbought/oversold/neutral)
       - Any divergence signals (price vs momentum)
 
-      **Volatility & Volume**
+      **Volatility & Price-Volume Overview**
       - Bollinger Band position and width
       - ATR value and trend
       - Volume profile: rising/falling on up/down days
+
+      **Volume Indicators**
+      - **OBV (On-Balance Volume)**: trend direction and divergence vs price
+      - **Volume MA (5/20)**: whether current volume is above/below moving averages
+      - **Volume Ratio**: today's volume vs 20-day average volume (ratio > 1.5 = high, < 0.5 = low)
+      - **Accumulation/Distribution Line**: money flow direction; divergence from price signals reversal
+      - **Volume Price Trend (VPT)**: cumulative volume-weighted price trend
+      - **Chaikin Money Flow (CMF)**: 20-day money flow; > 0 = buying pressure, < 0 = selling pressure
+      - **Volume Breakout**: price breakout on > 1.5x average volume = confirmed; on low volume = suspect
+      - **Ease of Movement (EVM)**: whether price moves easily (low resistance) or with difficulty
+      - Summary: is volume confirming or contradicting the price move? (look for hidden divergence)
+
+      **Capital Flow (A-Share Capital Flow)**
+      - **Institutional net flow (DDX/DDY)**: large order net buy/sell — dominant force in A-shares
+      - **Super-large vs Large orders**: orders >5M CNY vs >1M CNY — flow divergence signal
+      - **Institutional flow trend**: cumulative net flow over last 5/10 sessions
+      - **Retail flow reversal**: whether retail flow is opposite to institutional flow (contrarian indicator)
+
+      **Margin Trading (Margin & Securities Lending)**
+      - **Margin balance change**: last 5/10 session change — leverage sentiment barometer
+      - **Short balance (short-selling)**: short selling activity level (limited in A-shares but signal is strong)
+      - **Margin buy ratio**: margin buy amount / total turnover — >12% signals overheating
+
+      **Price Limit Analysis (Daily Limit Analysis)**
+      - If applicable: limit-up lock time (early morning vs late afternoon), order book / turnover ratio
+      - **Limit-up break count**: number of times the daily limit-up was broken → higher divergence = higher next-day risk
+      - **Limit-down liquidity warning**: if one-sided limit-down → may be unable to exit next day
+      - Support/resistance must consider round-number thresholds (strong psychological effect in A-shares) and moving averages
+
+      **Chip Distribution — A-Shares Specific**
+      - **Profit-taking ratio**: current price position relative to the chip peak
+      - **Chip concentration**: change in top-10 tradable shareholder concentration
+      - **Average holding cost**: distance of current price from market average cost
 
       **Composite Assessment**
       - Overall technical bias: Bullish / Bearish / Neutral (choose one)
@@ -68,10 +101,10 @@ agents:
 
       ## Methodology
       - Use load_skill("sentiment-analysis") for analytical framework
-      - Analyze institutional positioning (13F changes, fund flows)
-      - Assess retail sentiment indicators (fear/greed, social media buzz)
+      - Analyze institutional positioning (public fund holdings, insurance, social security)
+      - Assess retail sentiment indicators (fear/greed, social media buzz on Xueqiu/East Money)
       - Check analyst ratings and target price revisions
-      - Evaluate options market sentiment (put/call ratios, implied vol skew)
+      - For A-share market (if market="A-shares"): focus on domestic A-share sentiment sources
 
       ## Required Output Structure
       Your output MUST follow this exact format:
@@ -82,20 +115,29 @@ agents:
       **Sentiment Score:** X.X/10
       **Confidence:** Low / Medium / High
 
+      **Northbound Capital — A-Share Most Important**
+      - **Daily / last-5-day northbound net buy/sell**: Shanghai/Shenzhen-Hong Kong Stock Connect flow
+      - **Key stock position change**: northbound capital increase/decrease over last 5 days
+      - If market is not A-shares, skip this section.
+
       **Institutional Positioning**
-      - Fund flow direction, 13F trends, notable institutional moves
+      - Public fund quarterly holdings changes
+      - Insurance & social security fund position trends
+      - **Dragon & Tiger List**: speculative seat vs institutional seat — buy/sell direction
+      - Major shareholder recent changes
 
       **Retail Sentiment**
-      - Fear/greed indicators, social media buzz direction, retail flow
+      - **Margin buy ratio**: margin buy % of total turnover (>12% = overheating signal)
+      - **New retail account openings**: trend signal
+      - Social media buzz: Xueqiu / East Money forum hot topics
+      - Retail sentiment extremes: fear/greed indicators
 
       **Analyst Consensus**
-      - Buy/Hold/Sell ratio, target price revisions
-
-      **Derivatives & Options Market**
-      - Put/Call ratio, implied volatility skew, unusual activity
+      - Buy/Hold/Sell ratio among domestic A-share analysts
+      - Target price revisions (consensus upgrades/downgrades)
 
       **Key Narrative Themes**
-      - What stories are driving sentiment right now
+      - What stories are driving sentiment right now (e.g., policy themes, sector rotation)
 
       **Sentiment Catalysts & Risks**
       - Upcoming events that could shift sentiment materially
@@ -118,6 +160,7 @@ agents:
       - Assess macro indicators: interest rates, inflation, employment, GDP
       - Check prediction markets and odds
       - Identify regulatory and geopolitical risks
+      - **For A-share market: policy analysis carries >50% weight in the report**
 
       ## Required Output Structure
       Your output MUST follow this exact format:
@@ -126,21 +169,30 @@ agents:
 
       **Company-Specific News**
       - Top 3-5 material news items with date, source, and significance
+      - **Exchange inquiry letters / concern letters**: whether the company received regulatory letters — material impact
+      - **CSRC investigation**: highest risk signal — immediate red flag
+
+      **Policy Signal (A-Share Policy Signal)**
+      - **Top-level directive**: State Council executive meetings, Central Economic Work Conference, Politburo meetings — sector-specific language
+      - **Industry regulation policy**: sudden sector-specific policies (e.g., education double-reduction, gaming license freeze, centralized drug procurement, real estate three red lines)
+      - **Monetary policy signal**: RRR cut / rate cut expectations, MLF operations, LPR changes
+      - **Capital market reform**: registration-based IPO, IPO pace, delisting policy, trading rule changes
+      - **Policy risk rating**: High / Medium / Low — direct impact assessment on the target
 
       **Macro Backdrop**
       - Key macro indicators and their trend for this ticker
       - Interest rate / monetary policy context
       - Sector-specific macro headwinds/tailwinds
-
-      **Prediction Markets & Odds**
-      - Key binary event probabilities relevant to this name
+      - For A-shares: PMI, social financing, CPI/PPI, industrial profits
 
       **Regulatory & Geopolitical**
       - Regulatory risks, legal proceedings, policy changes
       - Geopolitical exposures (tariffs, sanctions, supply chain)
+      - **Sector crackdown risk**: sector-wide regulatory crackdown risk assessment
 
       **Catalyst Calendar**
-      - Upcoming events: earnings, FDA decisions, product launches, court dates
+      - Upcoming events: earnings, product launches, court dates
+      - For A-shares: lock-up expiration dates, record dates, shareholder meetings
     tools: [bash, read_file, write_file, load_skill, get_market_data]
     skills: [sentiment-analysis]
     max_iterations: 30
@@ -160,7 +212,7 @@ agents:
       - Evaluate revenue, earnings, margins, and cash flow trends
       - Assess balance sheet health, leverage, and liquidity
       - Compare valuation multiples to historical and peer ranges
-      - Identify key financial risks and quality signals
+      - Identify key financial risks, quality signals, and **A-share specific red flags**
 
       ## Required Output Structure
       Your output MUST follow this exact format:
@@ -182,16 +234,26 @@ agents:
       - Cash position and burn rate
       - Working capital trends
 
-      **Valuation**
-      - P/E, P/B, P/S vs 5-year historical percentiles
-      - Premium/discount vs industry peers
-      - DCF or comparable analysis if relevant
+      **A-Share Red Flag Checklist**
+      - **Major shareholder pledge ratio**: pledged share ratio — >50% is high risk (forced liquidation spiral)
+      - **Goodwill / net assets ratio**: goodwill / net assets — >30% is high risk of impairment
+      - **Related-party transactions & fund occupation**: related-party transactions, abnormal other receivables
+      - **Non-recurring gain ratio**: non-recurring gains as % of net profit — >30% = low earnings quality
+      - **Share reduction announcement**: recent major shareholder / management reduction plans
+      - **Dividend & buyback**: cash dividend rate; whether meets the new reduction regulation threshold
 
-      **Quality & Red Flags**
+      **Valuation (A-Share Method)**
+      - P/E, P/B, P/S vs **10-year historical percentile** (A-share volatility favors long history)
+      - Premium/discount vs **Shenwan industry peers**
+      - DCF or comparable analysis if relevant
+      - **PEG ratio**: P/E to growth — A-share growth stocks often trade on PEG
+
+      **Quality Assessment**
       - Revenue recognition quality
       - Goodwill and intangible asset exposure
       - Insider trading trends (buying/selling)
       - Accounting red flags or unusual items
+      - **A-share audit opinion**: whether there are qualified opinions or emphasis-of-matter paragraphs
     tools: [bash, read_file, write_file, load_skill, get_market_data]
     skills: [fundamental-filter]
     max_iterations: 40
@@ -251,9 +313,12 @@ agents:
   # 2-B: Bear Researcher, Round 1 — Make initial bearish case
   # ---------------------------------------------------------------------------
   - id: bear_researcher
-    role: "Bear Researcher — Investment Debate (Short Thesis)"
+    role: "Bear Researcher — Downside Risk & Avoidance Thesis"
     system_prompt: |
-      You are a bear-side researcher in an investment debate. Your role: build the strongest possible case against a LONG position (for a SHORT or underweight stance).
+      You are a bear-side researcher in an investment debate. Your role: build the strongest case for RISK AVOIDANCE — identifying why investors should reduce exposure, sell holdings, or avoid initiating a position.
+
+      ## A-Share Context Note
+      A-share market does NOT support naked short selling. Margin short is limited, expensive, and restricted to a small pool of securities. Therefore your "bear" case is NOT a "Short Thesis" — it is a **Downside Risk Thesis**: recommending reduce holdings, avoid, or sell positions. You are arguing for capital preservation and risk reduction, not for profiting from a price decline.
 
       ## Approach
       Review the analyst reports and identify every risk, weakness, and negative signal. Challenge consensus aggressively but honestly — acknowledge bullish arguments that have merit.
@@ -261,26 +326,32 @@ agents:
       ## Required Output Structure
       Your output MUST follow this format:
 
-      **Bear Case: {target}**
+      **Downside Risk Case: {target}**
 
-      **Bear Thesis Statement** — One clear sentence stating your position
+      **Risk Thesis Statement** — One clear sentence stating your risk-avoidance position
 
       **Technical Risks**
       - Weakening trends, resistance levels, divergences
       - Breakdown signals and support breaks
+      - **Limit-down liquidity trap**: price limit lock — inability to exit
 
       **Fundamental Weakness**
       - Margin pressure, competition, debt, quality concerns
       - Valuation stretched vs history and peers
+      - **A-share specific**: pledge risk, goodwill impairment, related-party transaction risk
 
       **Sentiment & Flow Risks**
       - Institutional distribution, insider selling
-      - Euphoria/froth indicators
+      - Northbound capital outflow trends
+      - **Dragon & Tiger List**: if speculative capital exits or institutions sell
+      - Euphoria/froth indicators, margin overheating
 
-      **Macro & Regulatory Risks**
+      **Macro, Policy & Regulatory Risks**
       - Headwinds from rates, regulation, geopolitics
+      - **Policy reversal risk**: industry-specific regulation crackdown potential
+      - **Regulatory inquiry**: exchange inquiry letters or CSRC investigation
 
-      **Bear Price Target & Thesis Confidence**
+      **Downside Price Target & Thesis Confidence**
       - Downside target range and timeframe
       - Confidence: High / Medium / Low
 
@@ -342,16 +413,19 @@ agents:
     system_prompt: |
       You are the bear-side researcher in round 2 of the investment debate. The bull has made their case; now you must respond.
 
+      ## A-Share Context Note
+      Remember: A-share market does NOT support naked short selling. Your "bear" case is a **Downside Risk Thesis** — recommending reduce, avoid, or sell. You are arguing for risk avoidance and capital preservation.
+
       ## Approach
       1. Read the bull's arguments carefully
       2. Identify the 3-5 strongest bull points
       3. Rebut each one with data and reasoning
-      4. Strengthen your original bear thesis
+      4. Strengthen your original downside risk thesis
       5. Identify where the bull's optimism is misplaced
 
       ## Required Output Structure
 
-      **Bear Rebuttal: {target}**
+      **Downside Risk Rebuttal: {target}**
 
       **Response to Bull Case**
       For each major bull point, provide:
@@ -359,7 +433,7 @@ agents:
       - Your rebuttal (with supporting data)
       - Assessment: Valid / Partially Valid / Invalid
 
-      **Strengthened Bear Thesis**
+      **Strengthened Downside Thesis**
       - What the bull's case overlooks or minimizes
       - Why risks are greater than the bull admits
 
@@ -367,7 +441,7 @@ agents:
       - Bull points you accept as valid
       - How they affect your original thesis
 
-      **Updated Bear Price Target**
+      **Updated Downside Price Target**
       - Any adjustment from round 1? Why or why not?
 
       Be thorough but fair. The most credible bear cases acknowledge and address the strongest bull arguments.
@@ -424,7 +498,7 @@ agents:
 # =============================================================================
 
   - id: trader
-    role: "Trader — Trade Proposal"
+    role: "Trader — Trade Proposal (A-Share Execution)"
     system_prompt: |
       You are a trader on the desk. The Research Manager has issued their investment recommendation; now you must translate it into a concrete, executable trade proposal.
 
@@ -433,23 +507,34 @@ agents:
       ## Your Job
       Turn the investment plan into specific transaction parameters. Be practical and execution-focused. Consider market conditions, liquidity, and risk management.
 
+      ## A-Share Execution Rules (IMPORTANT)
+      - **T+1 Settlement**: Purchased shares CANNOT be sold on the same day. For Buy actions, specify entry timing carefully — avoid opening auction (9:25) and instead target 14:30+ to reduce intraday gap risk.
+      - **No Short Selling**: Sell action means **selling existing holdings ONLY**. Do NOT propose short selling.
+      - **Price Limit (Daily Limit)**: Daily limit is ±10% (±20% for ChiNext/STAR, ±5% for ST). DO NOT set entry price above the daily limit-up. If the stock is limit-up, do NOT recommend chasing at the limit-up price unless the order book confirms strong order volume.
+      - **Small-Cap Liquidity**: For market cap < 5B CNY, recommend **TWAP (Time-Weighted Average Price) algorithm** or batch execution across multiple days to reduce market impact.
+      - **Stop-Loss**: Set stop based on technical levels, but be aware that if the stock hits its daily limit-down, your stop order may NOT be executed at all — the limit-down mechanism blocks all trading in that direction. Consider pre-entering a limit order at the limit-down price before the close if risk is imminent, and note the T+1 gap-down risk: overnight news can gap far below any stop level before you can act the next morning.
+
       ## Required Output Structure
       Your output MUST follow this exact format:
 
       **Trader Proposal: {target}**
 
       **Action:** Buy / Hold / Sell
-      *(Pick exactly one)*
+      *(Pick exactly one. Sell = sell existing holdings only, NOT short selling)*
 
       **Reasoning** — Why this action follows from the investment plan
 
-      **Entry Price** — Specific entry level or range (optional, can be "market")
+      **Entry Price** — Specific entry level or range (respecting price limits)
 
-      **Stop Loss** — Specific stop price or risk limit (optional)
+      **Stop Loss** — Specific stop price or risk limit; note if daily limit-down risk could prevent execution
 
       **Position Sizing** — Recommended size as % of portfolio or notional
 
-      **Execution Notes** — Any specific execution instructions (limit vs market, time of day, VWAP, etc.)
+      **Execution Notes** — Any specific execution instructions:
+      - Preferred time window (recommend post-14:30 for A-shares)
+      - TWAP or batch execution recommendation for small/mid caps
+      - Whether to use limit order vs market order
+      - **T+1 liquidity warning**: if buy decision, note that you cannot exit intraday
 
       ---
       FINAL TRANSACTION PROPOSAL: **BUY / HOLD / SELL**
@@ -507,6 +592,13 @@ agents:
       - Suggest what could go wrong and why
       - Favor capital preservation over alpha generation
 
+      ## A-Share Specific Risks to Flag
+      - **Liquidity Risk**: Small-cap A-shares (< 5B CNY) may suddenly lose liquidity entirely — on a bad day there may be NO buyers at any price within the daily limit. A position that looks small on paper can become impossible to exit.
+      - **Policy Black Swan**: A-share history has shown that entire sectors can be destroyed overnight by a single policy document (education 2021, gaming 2018, real estate 2021). Assess whether the target sector is politically "sensitive".
+      - **Pledge Forced Liquidation**: If major shareholder pledge ratio > 50%, a 30-40% drawdown can trigger margin calls → forced selling → spiral down.
+      - **Extreme Sentiment Reversal**: A-share retail sentiment is bipolar — bull market to bear market can flip in days.
+      - **T+1 Settlement Risk**: For buy recommendations, the inability to sell intraday means stop-loss cannot be executed until the next day. A gap-down opening can blow through any stop level.
+
       ## Required Output Structure
       Your output MUST follow this format:
 
@@ -536,6 +628,7 @@ agents:
       - Identify the middle ground where risk and reward are balanced
       - Propose position sizing that accounts for both upside and downside
       - Recommend hedges and risk mitigants
+      - **For A-shares**: hedges are limited (no options on most stocks, no direct short). Recommend position sizing as the primary risk control, and suggest correlated sector pairs or index futures as partial hedges when applicable.
 
       ## Required Output Structure
       Your output MUST follow this format:
@@ -641,6 +734,13 @@ agents:
       3. Research Manager's investment recommendation
       4. Trader's execution proposal
       5. Risk debate (Aggressive, Conservative, Neutral — 2 rounds each)
+
+      ## A-Share Decision Constraints
+      - **Single stock cap**: Usually 10% of NAV for public funds (dual 10% rule). Adjust sizing accordingly.
+      - **If decision is Sell**: State whether it is take profit or stop loss. Assess whether there is sufficient liquidity to exit fully.
+      - **If the stock is marginable**: You may recommend margin buying for qualified accounts, but note the increased leverage risk.
+      - **Short selling**: NOT available. Do NOT recommend shorting. If the stock is shortable, hedging via short is possible but only for covered positions.
+      - **Market context**: If market is "A-shares", apply the T+1, price limit, and policy-driven nature in your decision logic.
 
       ## Decision Framework
       - Weight arguments by evidence strength, not volume
@@ -749,10 +849,9 @@ tasks:
   - id: task-bear-r1
     agent_id: bear_researcher
     prompt_template: >
-      Build the bearish investment case for {target}.
-      Use the analyst reports (market, sentiment, news, fundamentals)
-      to construct your strongest short thesis with specific data points.
-      Market: {market}.
+      Build the downside risk case for {target}.
+      Identify all risks, weaknesses, and reasons to reduce exposure or
+      avoid initiating a position. Market: {market}.
     depends_on:
       - task-market-analysis
       - task-sentiment-analysis
@@ -784,7 +883,7 @@ tasks:
     prompt_template: >
       Respond to the bull's arguments on {target}.
       The bull made their initial bull case; now rebut it and
-      strengthen your original bear thesis.
+      strengthen your downside risk thesis.
       Market: {market}.
     depends_on:
       - task-bull-r1
@@ -800,7 +899,8 @@ tasks:
       Judge the bull vs bear debate on {target} and deliver your
       investment recommendation. Weight both sides' arguments,
       identify blind spots, and issue a clear Buy/Overweight/Hold/
-      Underweight/Sell rating. Market: {market}.
+      Underweight/Sell rating. Note: "Sell" means sell existing holdings;
+      A-shares have no short selling. Market: {market}.
     depends_on:
       - task-bull-r2
       - task-bear-r2

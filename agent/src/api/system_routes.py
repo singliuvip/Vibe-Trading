@@ -27,6 +27,13 @@ class HealthResponse(BaseModel):
     timestamp: str = Field(..., description="Server timestamp")
 
 
+class InitStatusResponse(BaseModel):
+    """System initialization status payload."""
+    initialized: bool = Field(..., description="Whether the system is initialized (API key configured)")
+    api_key_configured: bool = Field(..., description="Whether the LLM API key is configured")
+    provider: Optional[str] = Field(None, description="Active LLM provider name, if configured")
+
+
 # ---------------------------------------------------------------------------
 # Process termination
 # ---------------------------------------------------------------------------
@@ -158,3 +165,27 @@ def register_system_routes(
             "docs": "/docs",
             "health": "/health",
         }
+
+    @app.get("/api/init/status", response_model=InitStatusResponse)
+    async def get_init_status():
+        """Check system initialization status.
+
+        Returns whether the LLM API key has been configured.  The frontend
+        uses this on first load to decide whether to show the setup wizard.
+        """
+        from src.api.settings_routes import _build_llm_settings_response
+
+        try:
+            settings = _build_llm_settings_response()
+        except Exception:
+            return InitStatusResponse(
+                initialized=False,
+                api_key_configured=False,
+                provider=None,
+            )
+
+        return InitStatusResponse(
+            initialized=settings.api_key_configured,
+            api_key_configured=settings.api_key_configured,
+            provider=settings.provider if settings.api_key_configured else None,
+        )

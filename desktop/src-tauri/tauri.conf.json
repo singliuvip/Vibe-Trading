@@ -1,0 +1,71 @@
+{
+  "productName": "Vibe-Trading",
+  "version": "0.1.10",
+  "identifier": "com.vibetrading.desktop",
+  "build": {
+    "frontendDist": "../../frontend/dist",
+    "devUrl": "http://localhost:8899",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "cd ../../frontend && npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Vibe-Trading",
+        "width": 1280,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["windows", "macos", "linux"],
+    "icon": [
+      "icons/icon.svg",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerIcon": "icons/icon.ico",
+        "dialogIcon": "icons/icon.ico"
+      }
+    },
+    "macOS": {
+      "certificateThumbprint": null,
+      "signingIdentity": null,
+      "provisioningProfile": null,
+      "minimumSystemVersion": "11.0",
+      "entitlements": null
+    },
+    "linux": {
+      "rpm": {},
+      "appimage": {
+        "bundleMediaFramework": false
+      },
+      "deb": {}
+    }
+  },
+  "plugins": {
+    "shell": {
+      "sidecar": [],
+      "scope": [
+        {
+          "name": "vibe-trading",
+          "cmd": "vibe-trading",
+          "args": true
+        }
+      ]
+    }
+  }
+}

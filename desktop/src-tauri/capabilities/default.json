@@ -1,0 +1,29 @@
+{
+  "identifier": "default",
+  "description": "Default permissions for Vibe-Trading Desktop",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "vibe-trading",
+          "cmd": "vibe-trading",
+          "args": true
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "vibe-trading",
+          "cmd": "vibe-trading",
+          "args": true
+        }
+      ]
+    },
+    "dialog:allow-message"
+  ]
+}

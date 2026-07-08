@@ -31,6 +31,7 @@ agent/tests/*_result.json
 .ruff_cache/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
+desktop/src-tauri/target/
 wiki/node_modules/
 wiki/dist/
 wiki/.astro/

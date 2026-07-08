@@ -145,6 +145,7 @@ export const api = {
   retrySwarmRun: (id: string) =>
     request<{ id: string; status: string; preset_name: string }>(`/swarm/runs/${id}/retry`, { method: "POST" }),
   getLLMSettings: () => request<LLMSettings>("/settings/llm"),
+  getInitStatus: () => request<InitStatusResponse>("/api/init/status"),
   updateLLMSettings: (settings: UpdateLLMSettingsRequest) =>
     request<LLMSettings>("/settings/llm", {
       method: "PUT",
@@ -1030,4 +1031,10 @@ export interface MessageItem {
   created_at: string;
   linked_attempt_id?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface InitStatusResponse {
+  initialized: boolean;
+  api_key_configured: boolean;
+  provider: string | null;
 }

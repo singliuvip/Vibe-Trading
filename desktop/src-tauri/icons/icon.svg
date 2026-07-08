@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1e3a5f;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#38bdf8;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#818cf8;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect x="8" y="8" width="240" height="240" rx="48" ry="48" fill="url(#bg)" />
+
+  <!-- "V" letterform (left side) -->
+  <polygon
+    points="56,72 96,172 112,172 72,72"
+    fill="url(#accent)" />
+
+  <!-- "T" letterform (right side) -->
+  <polygon
+    points="108,72 192,72 192,96 162,96 162,172 138,172 138,96 108,96"
+    fill="url(#accent)" />
+
+  <!-- Subtle glow ring -->
+  <rect x="8" y="8" width="240" height="240" rx="48" ry="48"
+    fill="none" stroke="url(#accent)" stroke-width="2" stroke-opacity="0.3" />
+</svg>

@@ -58,7 +58,7 @@ def check_connection(profile_id: str | None = None, **overrides: Any) -> dict[st
         report["transport"] = profile.transport
         return report
 
-    if profile.transport in ("broker_sdk", "broker_http"):
+    if profile.transport == "broker_sdk":
         module = _sdk_module(profile.connector, profile.transport)
         report = module.check_status(module.build_config(profile.config, overrides))
         report["profile_id"] = profile.id
@@ -77,7 +77,7 @@ def get_account(profile_id: str | None = None, **overrides: Any) -> dict[str, An
         from src.trading.connectors.ibkr.local import get_account_snapshot
 
         return _with_profile(profile, get_account_snapshot(_ibkr_config(profile, overrides)))
-    if profile.transport in ("broker_sdk", "broker_http"):
+    if profile.transport == "broker_sdk":
         module = _sdk_module(profile.connector, profile.transport)
         return _with_profile(profile, module.get_account_snapshot(module.build_config(profile.config, overrides)))
     return _call_remote(profile, "account", {})
@@ -90,7 +90,7 @@ def get_positions(profile_id: str | None = None, **overrides: Any) -> dict[str, 
         from src.trading.connectors.ibkr.local import get_positions as _get_positions
 
         return _with_profile(profile, _get_positions(_ibkr_config(profile, overrides)))
-    if profile.transport in ("broker_sdk", "broker_http"):
+    if profile.transport == "broker_sdk":
         module = _sdk_module(profile.connector, profile.transport)
         return _with_profile(profile, module.get_positions(module.build_config(profile.config, overrides)))
     return _call_remote(profile, "positions", {})
@@ -111,7 +111,7 @@ def get_open_orders(
             profile,
             _get_open_orders(_ibkr_config(profile, overrides), include_executions=include_executions),
         )
-    if profile.transport in ("broker_sdk", "broker_http"):
+    if profile.transport == "broker_sdk":
         module = _sdk_module(profile.connector, profile.transport)
         return _with_profile(
             profile,
@@ -146,7 +146,7 @@ def get_quote(
                 sec_type=sec_type,
             ),
         )
-    if profile.transport in ("broker_sdk", "broker_http"):
+    if profile.transport == "broker_sdk":
         module = _sdk_module(profile.connector, profile.transport)
         return _with_profile(profile, module.get_quote(symbol, config=module.build_config(profile.config, overrides)))
     return _call_remote(profile, "quote", {"symbols": [symbol], "symbol": symbol})
@@ -192,7 +192,7 @@ def get_history(
                 use_rth=use_rth,
             ),
         )
-    if profile.transport in ("broker_sdk", "broker_http"):
+    if profile.transport == "broker_sdk":
         module = _sdk_module(profile.connector, profile.transport)
         return _with_profile(
             profile,

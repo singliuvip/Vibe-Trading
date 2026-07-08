@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState } from "react";
-import { Link, Outlet, useLocation, useSearchParams } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Activity, BarChart3, Bot, Check, ChevronDown, FileText, Languages, Moon, Sun, Plus, Trash2, Pencil, MessageSquare, ChevronsLeft, ChevronsRight, Settings, Layers, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -35,10 +35,28 @@ export function Layout() {
 
   const activeSessionId = searchParams.get("session");
   const streamingSessionId = useAgentStore(s => s.streamingSessionId);
+  const navigate = useNavigate();
 
   useEffect(() => {
     localStorage.setItem("qa-sidebar", collapsed ? "collapsed" : "expanded");
   }, [collapsed]);
+
+  // Check system initialization status on first load.
+  // Redirect to /setup if the LLM API key has not been configured yet.
+  useEffect(() => {
+    api.getInitStatus()
+      .then((status) => {
+        if (!status.initialized) {
+          navigate("/setup");
+        }
+      })
+      .catch(() => {
+        // If the init-status endpoint is unavailable, allow the user to
+        // continue — the backend may not be running or may be an older
+        // version without this route.
+        console.warn("Failed to check init status");
+      });
+  }, [navigate]);
 
   const loadSessions = () => {
     api.listSessions()

@@ -1,0 +1,78 @@
+{
+  "name": "@ynhcj/xiaoyi",
+  "version": "2.5.7",
+  "description": "XiaoYi channel plugin for OpenClaw",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "xiaoyi.js",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc"
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "xiaoyi",
+    "channel"
+  ],
+  "author": "ynhcj",
+  "license": "MIT",
+  "openclaw": {
+    "extensions": [
+      "xiaoyi.js"
+    ],
+    "channels": [
+      "xiaoyi"
+    ],
+    "installDependencies": true,
+    "install": {
+      "npmSpec": "@ynhcj/xiaoyi@latest",
+      "localPath": ".",
+      "defaultChoice": "npm"
+    },
+    "channel": {
+      "id": "xiaoyi",
+      "label": "XiaoYi",
+      "selectionLabel": "XiaoYi (小艺)",
+      "docsPath": "/channels/xiaoyi",
+      "docsLabel": "xiaoyi",
+      "blurb": "小艺 A2A 协议支持，通过 WebSocket 连接。",
+      "order": 80,
+      "aliases": [
+        "xy"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "uuid": "^13.0.0",
+    "ws": "^8.16.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/node-fetch": "^2.6.13",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.3.3"
+  }
+}

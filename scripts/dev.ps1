@@ -36,11 +36,12 @@ $BackendPort = if ($env:VIBE_BACKEND_PORT) { $env:VIBE_BACKEND_PORT } else { "88
 $FrontendHost = if ($env:VIBE_FRONTEND_HOST) { $env:VIBE_FRONTEND_HOST } else { "127.0.0.1" }
 $FrontendPort = if ($env:VIBE_FRONTEND_PORT) { $env:VIBE_FRONTEND_PORT } else { "5899" }
 
-# Detect Python binary
+# Detect Python binary (resolve to absolute path — UseShellExecute=false requirement)
 $PythonBin = if ($env:PYTHON) { $env:PYTHON }
 elseif (Test-Path "$Root\.venv\Scripts\python.exe") { "$Root\.venv\Scripts\python.exe" }
 elseif (Test-Path "$Root\agent\.venv\Scripts\python.exe") { "$Root\agent\.venv\Scripts\python.exe" }
-else { "python" }
+else { (Get-Command python -ErrorAction SilentlyContinue).Source }
+if (-not $PythonBin) { throw "Python not found. Install Python 3.11+ or set `$env:PYTHON." }
 
 # Ensure state directories exist
 New-Item -ItemType Directory -Force -Path $LogDir, $PidDir | Out-Null
@@ -54,8 +55,8 @@ function Test-Running {
     $pidFile = Get-PidFile $Svc
     if (-not (Test-Path $pidFile)) { return $false }
     try {
-        $pid = [int](Get-Content $pidFile -Raw).Trim()
-        $proc = Get-Process -Id $pid -ErrorAction Stop
+        $svcPid = [int](Get-Content $pidFile -Raw).Trim()
+        $proc = Get-Process -Id $svcPid -ErrorAction Stop
         return -not $proc.HasExited
     } catch { return $false }
 }
@@ -133,6 +134,7 @@ function Start-Backend {
     $psi.CreateNoWindow = $true
 
     $psi.EnvironmentVariables["PYTHONPATH"] = $agentDir
+    $psi.EnvironmentVariables["VIBE_TRADING_CHANNELS_AUTO_START"] = "true"
 
     $proc = [System.Diagnostics.Process]::Start($psi)
     $proc.Id | Out-File -FilePath $pidFile -NoNewline
@@ -180,8 +182,21 @@ function Start-Frontend {
         } finally { Pop-Location }
     }
 
+    # Resolve full path to npx.cmd — UseShellExecute=false requires a real executable
+    $npxPath = (Get-Command npx.cmd -ErrorAction SilentlyContinue).Source
+    if (-not $npxPath) { $npxPath = (Get-Command npx -ErrorAction SilentlyContinue).Source }
+    if (-not $npxPath -or $npxPath -like "*.ps1") {
+        # Fall back: find npx.cmd in the Node.js install directory
+        $nodeDir = Split-Path (Get-Command node -ErrorAction SilentlyContinue).Source -Parent
+        if ($nodeDir -and (Test-Path "$nodeDir\npx.cmd")) { $npxPath = "$nodeDir\npx.cmd" }
+    }
+    if (-not $npxPath) {
+        Write-Host "  npx.cmd not found in PATH; install Node.js first" -ForegroundColor Red
+        return
+    }
+
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "npx"
+    $psi.FileName = $npxPath
     $psi.Arguments = "vite --host $FrontendHost --port $FrontendPort"
     $psi.WorkingDirectory = $frontendDir
     $psi.UseShellExecute = $false
@@ -212,13 +227,13 @@ function Stop-Service {
         Write-Host "  $Svc not started by scripts/dev" -ForegroundColor Yellow
         return
     }
-    $pid = [int](Get-Content $pidFile -Raw).Trim()
+    $svcPid = [int](Get-Content $pidFile -Raw).Trim()
     try {
-        $proc = Get-Process -Id $pid -ErrorAction Stop
-        Write-Host "  stopping $Svc (pid $pid)..." -ForegroundColor Cyan
+        $proc = Get-Process -Id $svcPid -ErrorAction Stop
+        Write-Host "  stopping $Svc (pid $svcPid)..." -ForegroundColor Cyan
         $proc.Kill($true)
     } catch {
-        Write-Host "  $Svc process not found (pid $pid)" -ForegroundColor Yellow
+        Write-Host "  $Svc process not found (pid $svcPid)" -ForegroundColor Yellow
     }
     Remove-Item -Force $pidFile -ErrorAction SilentlyContinue
 }

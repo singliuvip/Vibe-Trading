@@ -48,6 +48,7 @@ _INSTALL_HINTS: dict[str, str] = {
     "whatsapp": "pip install 'vibe-trading-ai[whatsapp]'",
     "websocket": "pip install 'vibe-trading-ai[channels]'",
     "xiaoyi": "pip install 'vibe-trading-ai[xiaoyi]'  # 或 pip install httpx",
+    "xiaoyi_a2a": "pip install 'vibe-trading-ai[xiaoyi]'  # 或 pip install websockets",
 }
 
 _AVAILABILITY_FLAGS: dict[str, tuple[str, ...]] = {

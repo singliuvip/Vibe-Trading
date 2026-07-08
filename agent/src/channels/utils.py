@@ -6,6 +6,7 @@ import ipaddress
 import re
 import socket
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from src.config.paths import get_data_dir
@@ -164,3 +165,30 @@ def _is_private(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     is called — that allowance is evaluated before this function runs.
     """
     return not addr.is_global or addr.is_multicast
+
+
+# ---------------------------------------------------------------------------
+# JSON 深度取值/设值工具
+# ---------------------------------------------------------------------------
+
+
+def _deep_get(d: dict[str, Any], path: list[str], default: Any = "") -> Any:
+    """从嵌套字典中按路径取值。"""
+    current = d
+    for key in path:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+        if current is None:
+            return default
+    return current
+
+
+def _deep_set(d: dict[str, Any], path: list[str], value: Any) -> None:
+    """在嵌套字典中按路径设值。"""
+    current = d
+    for key in path[:-1]:
+        if key not in current or not isinstance(current[key], dict):
+            current[key] = {}
+        current = current[key]
+    current[path[-1]] = value

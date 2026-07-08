@@ -38,20 +38,15 @@ import asyncio
 import hmac
 import json
 import logging
-from collections.abc import Callable
 from contextlib import suppress
-from pathlib import Path
 from typing import Any
 
-import httpx
+from pydantic import BaseModel, Field, field_validator
 
-from pydantic import Field, field_validator
-from pydantic import BaseModel
-
+from src.channels.base import BaseChannel
 from src.channels.bus.events import InboundMessage, OutboundMessage
 from src.channels.bus.queue import MessageBus
-from src.channels.base import BaseChannel
-from src.channels.utils import get_runtime_subdir, safe_filename
+from src.channels.utils import _deep_get, _deep_set
 
 logger = logging.getLogger(__name__)
 
@@ -141,33 +136,6 @@ class XiaoyiConfig(BaseModel):
         if value not in ("standalone", "api_server"):
             raise ValueError("mode must be 'standalone' or 'api_server'")
         return value
-
-
-# ---------------------------------------------------------------------------
-# JSON 深度取值/设值工具
-# ---------------------------------------------------------------------------
-
-
-def _deep_get(d: dict[str, Any], path: list[str], default: Any = "") -> Any:
-    """从嵌套字典中按路径取值。"""
-    current = d
-    for key in path:
-        if not isinstance(current, dict):
-            return default
-        current = current.get(key)
-        if current is None:
-            return default
-    return current
-
-
-def _deep_set(d: dict[str, Any], path: list[str], value: Any) -> None:
-    """在嵌套字典中按路径设值。"""
-    current = d
-    for key in path[:-1]:
-        if key not in current or not isinstance(current[key], dict):
-            current[key] = {}
-        current = current[key]
-    current[path[-1]] = value
 
 
 # ---------------------------------------------------------------------------

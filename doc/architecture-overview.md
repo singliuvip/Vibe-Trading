@@ -1,6 +1,8 @@
 # Vibe-Trading 架构全景文档
 
-> 版本：v0.1.10 | 更新日期：2026-07-06 | Main Agent 深度审查：v1
+> 版本：v0.1.10 | 更新日期：2026-07-07 | Main Agent 深度审查：v2
+
+> **相关特性文档**：[miniqmt/xtquant 实盘集成方案](features/xtquant-integration.md)
 
 ---
 
@@ -36,6 +38,7 @@
     - [21.7 可扩展性分析](#217-可扩展性分析)
     - [21.8 前端-后端交互分析](#218-前端-后端交互分析)
     - [21.9 关键发现优先级排序](#219-关键发现优先级排序)
+22. [特性文档索引](features/) *(扩展功能独立文档)*
 
 ---
 
@@ -575,6 +578,8 @@ live/
 **位置**：`agent/src/trading/`
 
 > ⚠ **高风险代码**：所有变更必须经过完整测试和人工审批。
+>
+> 📎 **相关特性文档**：[miniqmt/xtquant 实盘集成方案](features/xtquant-integration.md) — 包含 A 股 Order Guard 规则、Kill Switch 加固、问题分析与修复方案
 
 ### 7.1 安全链路
 
@@ -636,7 +641,8 @@ trading/connectors/
 ├── futu/          # 富途证券 (broker_sdk)
 ├── dhan/          # Dhan India (broker_sdk)
 ├── shoonya/       # Shoonya India (broker_sdk)
-└── trading212/    # Trading 212 (broker_sdk, 只读)
+├── trading212/    # Trading 212 (broker_sdk, 只读)
+└── xtquant/       # ⏳ 规划中 — 见 [miniqmt/xtquant 实盘集成方案](features/xtquant-integration.md)
 ```
 
 ### 7.3 TradingProfile 模型

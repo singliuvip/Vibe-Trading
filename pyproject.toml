@@ -106,9 +106,12 @@ ashare = [
     # A-share loader needs no extra dependency (stdlib HTTP only).
     "baostock>=0.8.8",
 ]
-xtquant = [
-    "xtquant",
-]
+# xtquant is not available on PyPI.  Install manually from the QMT
+# installation directory, e.g.:
+#   pip install /path/to/QMT/bin/xtquant/xtquant-*.whl
+# xtquant = [
+#     "xtquant",
+# ]
 harmonic = [
     "pyharmonics>=1.5.0",
 ]
@@ -159,6 +162,11 @@ weixin = [
 ]
 whatsapp = [
     "neonize>=0.3.18.post0",
+]
+xiaoyi = [
+    # httpx is already a core dependency — no extra packages needed.
+    # 华为小艺技能频道使用 HTTP Webhook 协议，
+    # 不需要额外的第三方 SDK。
 ]
 channels = [
     "aiohttp>=3.9.0",

@@ -1667,6 +1667,10 @@ def _sdk_connector_status(broker: str) -> Optional[dict]:
 
     When the SDK connection is alive, a heartbeat file is written so the
     runner liveness subsystem reports ``alive: true`` for this broker.
+
+    For xtquant specifically, if ``check_status`` reports success, we follow
+    up with an active ``probe_connection()`` to verify the miniQMT link is
+    still responsive (§9.6.1 heartbeat).
     """
     from src.trading.service import _SDK_CONNECTOR_MODULES
 
@@ -1685,6 +1689,12 @@ def _sdk_connector_status(broker: str) -> Optional[dict]:
         if result.get("status") != "ok":
             safe["error"] = result.get("error", "unknown")
         else:
+            # ── Active heartbeat probe (§9.6.1) ──
+            # For xtquant, call probe_connection() to verify the miniQMT link
+            # is alive.  A stale _trader can survive a process restart without
+            # the underlying IPC still being connected.
+            safe["heartbeat"] = _sdk_heartbeat_probe(broker, mod)
+
             # Write SDK heartbeat so runner liveness detects this broker as alive
             try:
                 from src.live.runtime.liveness import write_heartbeat
@@ -1695,6 +1705,23 @@ def _sdk_connector_status(broker: str) -> Optional[dict]:
     except Exception:
         logger.debug("sdk status check failed for %s", broker, exc_info=True)
         return {"status": "error", "error": "check failed"}
+
+
+def _sdk_heartbeat_probe(broker: str, mod: Any) -> str:
+    """Active connection probe for SDK connectors that support it.
+
+    Currently only xtquant exposes :func:`probe_connection`.  Other connectors
+    return ``"not_supported"``.
+    """
+    probe_fn = getattr(mod, "probe_connection", None)
+    if probe_fn is None:
+        return "not_supported"
+    try:
+        alive = probe_fn()
+        return "ok" if alive else "unresponsive"
+    except Exception:
+        logger.debug("sdk heartbeat probe failed for %s", broker, exc_info=True)
+        return "unresponsive"
 
 
 @app.get("/live/status", response_model=LiveStatusResponse, dependencies=[Depends(require_auth)])

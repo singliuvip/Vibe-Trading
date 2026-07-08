@@ -34,6 +34,7 @@ from src.trading.connectors.robinhood.classification import ROBINHOOD_TOOL_CLASS
 from src.trading.connectors.shoonya.classification import SHOONYA_TOOL_CLASS
 from src.trading.connectors.tiger.classification import TIGER_TOOL_CLASS
 from src.trading.connectors.trading212.classification import TRADING212_TOOL_CLASS
+from src.trading.connectors.xtquant.classification import XTQUANT_TOOL_CLASS
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ _BROKER_CURATED_MAPS = {
     "dhan": DHAN_TOOL_CLASS,
     "shoonya": SHOONYA_TOOL_CLASS,
     "trading212": TRADING212_TOOL_CLASS,
+    "xtquant": XTQUANT_TOOL_CLASS,
 }
 
 

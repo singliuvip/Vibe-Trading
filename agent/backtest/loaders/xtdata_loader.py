@@ -1,17 +1,16 @@
 """xtdata (miniQMT) A-share market data loader.
 
 Uses xtquant.xtdata to download and read OHLCV data from the local miniQMT
-process.  All xtdata calls are serialised through a module-level lock to
-prevent BSON assertion crashes in the underlying C extension.
+process on Windows.  All xtdata calls are serialised through a module-level
+lock to prevent BSON assertion crashes in the underlying C extension.
 
-When running inside a Docker container (Linux), xtquant is not available and
-the loader falls back to the QMT Bridge HTTP API on the host machine.
+This loader requires a native Windows environment with miniQMT installed;
+xtquant is not available on Linux/macOS.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from typing import Any
 
@@ -24,88 +23,22 @@ logger = logging.getLogger(__name__)
 
 _xtdata_lock = threading.Lock()
 
-# QMT Bridge HTTP fallback config
-_BRIDGE_URL = os.getenv("XTQUANT_BRIDGE_URL", "http://host.docker.internal:8888")
-_BRIDGE_TOKEN = os.getenv("XTQUANT_BEARER_TOKEN", "qmt-ql-8f3a2d1e9c")
-
-
-def _http_load_bars(
-    symbol: str,
-    period: str,
-    limit: int,
-) -> pd.DataFrame:
-    """Load OHLCV bars via QMT Bridge HTTP API (Docker/Linux fallback).
-
-    Args:
-        symbol: A-share ticker, e.g. ``600036.SH``.
-        period: Bar period (``1d``, ``1h``, etc.).
-        limit: Max number of bars to fetch.
-
-    Returns:
-        DataFrame with columns open/high/low/close/volume.
-
-    Raises:
-        NoAvailableSourceError: If the bridge is unreachable or returns an error.
-    """
-    import json
-    import urllib.request
-
-    url = f"{_BRIDGE_URL.rstrip('/')}/api/v1/market/bars"
-    body = json.dumps({
-        "symbol": symbol,
-        "period": period,
-        "limit": limit,
-    }).encode("utf-8")
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {_BRIDGE_TOKEN}",
-    }
-
-    try:
-        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as exc:
-        raise NoAvailableSourceError(
-            "xtdata",
-            f"QMT Bridge HTTP request failed: {exc}",
-        ) from exc
-
-    if data.get("status") != "ok":
-        raise NoAvailableSourceError(
-            "xtdata",
-            f"QMT Bridge returned error: {data.get('error', 'unknown')}",
-        )
-
-    bars = data.get("bars", [])
-    if not bars:
-        raise NoAvailableSourceError("xtdata", f"empty bars for {symbol}")
-
-    df = pd.DataFrame(bars)
-    if df.empty:
-        raise NoAvailableSourceError("xtdata", f"empty DataFrame for {symbol}")
-
-    # Rename columns to OHLCV standard
-    col_map = {"t": "time", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"}
-    df = df.rename(columns=col_map)
-
-    # Set time as index if present
-    if "time" in df.columns:
-        df["time"] = pd.to_datetime(df["time"])
-        df = df.set_index("time")
-
-    keep = ["open", "high", "low", "close", "volume"]
-    if "amount" in df.columns:
-        keep.append("amount")
-    df = df[[c for c in keep if c in df.columns]]
-
-    return validate_ohlc(df)
-
 
 @register
 class XtDataLoader:
     name = "xtdata"
+
+    #: Default price adjustment method.  ``"front"`` (前复权) is the xtdata
+    #: default and matches the behaviour of other Alpha Zoo loaders (tushare /
+    #: akshare) which also default to front-adjusted prices.
+    DEFAULT_ADJUST = "front"
+
+    #: Supported adjustment modes mapped to xtdata ``dividend_type`` values.
+    ADJUST_MAP: dict[str | None, str] = {
+        "front": "front",
+        "back":  "back",
+        None:    "none",
+    }
 
     PERIOD_MAP = {
         "1m": "1m",
@@ -129,16 +62,36 @@ class XtDataLoader:
 
         Returns a DataFrame with columns open/high/low/close/volume.
 
-        Tries native xtquant first (Windows), then falls back to QMT Bridge
-        HTTP API (Docker/Linux).
+        Uses native ``xtquant.xtdata`` directly (Windows only).
+
+        Keyword Args:
+            period: Bar period (``1d``, ``1h``, ``1m``, etc.).  Default ``1d``.
+            adjust: Price adjustment mode — ``\"front\"`` (前复权, default),
+                ``\"back\"`` (后复权), or ``None`` (不复权).
         """
         period = kwargs.get("period", "1d")
         xt_period = self.PERIOD_MAP.get(period, "1d")
 
-        # ── Attempt 1: native xtquant (Windows) ──
+        # Resolve adjustment / dividend_type (§9.5.1)
+        adjust = kwargs.get("adjust", self.DEFAULT_ADJUST)
+        if adjust not in self.ADJUST_MAP:
+            logger.warning(
+                "Unknown adjust=%r for xtdata loader, falling back to %r",
+                adjust, self.DEFAULT_ADJUST,
+            )
+            adjust = self.DEFAULT_ADJUST
+        dividend_type = self.ADJUST_MAP[adjust]
+
+        # ── Native xtquant (Windows) ──
         try:
             import xtquant.xtdata as xtdata
+        except ImportError as exc:
+            raise NoAvailableSourceError(
+                "xtdata",
+                "xtquant is not installed. This loader requires a Windows host with miniQMT.",
+            ) from exc
 
+        try:
             # Format dates as YYYYMMDD (xtdata format)
             start = str(start_date).replace("-", "")[:8]
             end = str(end_date).replace("-", "")[:8]
@@ -151,7 +104,7 @@ class XtDataLoader:
                     period=xt_period,
                     start_time=start,
                     end_time=end,
-                    dividend_type="front",
+                    dividend_type=dividend_type,
                     fill_data=True,
                 )
 
@@ -164,28 +117,15 @@ class XtDataLoader:
                         keep.append("amount")
                     df = df[[c for c in keep if c in df.columns]]
                     return validate_ohlc(df)
-        except ImportError:
-            logger.info("xtquant not installed, trying HTTP bridge fallback for %s", symbol)
-        except Exception as exc:
-            logger.warning("Native xtquant load failed for %s: %s", symbol, exc)
 
-        # ── Attempt 2: QMT Bridge HTTP (Docker/Linux) ──
-        try:
-            # Estimate limit from date range
-            days = 90
-            try:
-                from datetime import datetime
-                s = datetime.strptime(str(start_date)[:10], "%Y-%m-%d")
-                e = datetime.strptime(str(end_date)[:10], "%Y-%m-%d")
-                days = max(1, (e - s).days)
-            except Exception:
-                pass
-
-            return _http_load_bars(symbol, period, limit=days)
+            raise NoAvailableSourceError(
+                "xtdata",
+                f"No data returned for {symbol} ({start_date} → {end_date})",
+            )
         except NoAvailableSourceError:
             raise
         except Exception as exc:
             raise NoAvailableSourceError(
                 "xtdata",
-                f"Both native xtquant and HTTP bridge failed for {symbol}: {exc}",
+                f"Native xtquant load failed for {symbol}: {exc}",
             ) from exc

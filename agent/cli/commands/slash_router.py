@@ -48,6 +48,7 @@ SLASH_COMMANDS: tuple[Command, ...] = (
     Command("export",  "Export current session (md / json)",         "cli.commands.session"),
     Command("debug",   "Toggle debug panel (token usage / latency)", "cli.commands.chat"),
     Command("quit",    "Exit (also: q, exit, :q)",                   "cli.commands.chat"),
+    Command("cache",   "Inspect / clear data-source caches",         "cli.commands.cache"),
 )
 
 

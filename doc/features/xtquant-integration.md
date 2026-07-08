@@ -1,6 +1,6 @@
 # miniqmt/xtquant 实盘集成方案
 
-> 功能特性文档 | 版本：v1 | 分析日期：2026-07-06
+> 功能特性文档 | 版本：v3 | 更新日期：2026-07-07
 > 分析人：Main Agent (Claude Opus 4.6) | 调度：Dispatcher
 
 ---
@@ -15,6 +15,16 @@
 6. [限制与风险](#6-限制与风险)
 7. [实施步骤](#7-实施步骤)
 8. [附录：miniqmt/xtquant API 速查](#8-附录miniqmtxtquant-api-速查)
+9. [问题分析与修复方案](#9-问题分析与修复方案)
+    - [9.1 连接生命周期管理](#91-连接生命周期管理)
+    - [9.2 Paper 模拟真实性问题](#92-paper-模拟真实性问题)
+    - [9.3 安全链缺口](#93-安全链缺口)
+    - [9.4 跨平台兼容问题](#94-跨平台兼容问题)
+    - [9.5 数据层集成问题](#95-数据层集成问题)
+    - [9.6 监控与可观测性](#96-监控与可观测性)
+    - [9.7 配置管理与用户体验](#97-配置管理与用户体验)
+    - [9.8 API 兼容性与版本管理](#98-api-兼容性与版本管理)
+    - [9.9 问题修复优先级排序](#99-问题修复优先级排序)
 
 ---
 
@@ -729,6 +739,506 @@ Vibe-Trading/
 │       └── xtquant-integration.md        ← 本文档
 └── pyproject.toml                        ← 修改（可选依赖）
 ```
+
+---
+
+## 9. 问题分析与修复方案
+
+> 分析人：Main Agent (Claude Opus 4.6) | 分析日期：2026-07-07
+> 基于对现有方案的深度审查，识别出 23 个问题（P0 致命 2 个、P1 重要 11 个、P2 建议 10 个），以下逐一分析并给出修复方案。
+
+---
+
+### 9.1 连接生命周期管理
+
+#### 9.1.1 单例模式的竞态条件（线程不安全）
+
+**问题描述**：`sdk.py` 中 `_ensure_connected()` 对全局变量 `_trader` / `_trader_config` 的读写没有加锁。当多个 Agent 工具并发调用时，可能出现：
+- 两个线程同时判断 `_trader is None`，各自创建 `XtQuantTrader` 实例
+- 一个线程正在 `_disconnect()` 清理旧连接，另一个线程已经在使用 `_trader`
+
+**严重程度**：重要
+
+**根因分析**：FastAPI 是多线程模型，Agent 工具可从不同 async task 并发调用。但 `_trader` 的创建/销毁/使用完全无锁。
+
+**解决方案**：新增 `_trader_lock = threading.Lock()` 保护 `_trader` 生命周期：
+
+```python
+_trader_lock = threading.Lock()
+
+def _ensure_connected(config: XtQuantConfig) -> Any:
+    global _trader, _trader_config
+    with _trader_lock:
+        if _trader is not None and _trader_config is not None:
+            if (_trader_config.mini_qmt_path == config.mini_qmt_path
+                and _trader_config.session_id == config.session_id):
+                return _trader
+            _disconnect()
+        # ... 创建新连接 ...
+        _trader = trader
+        _trader_config = config
+        return _trader
+```
+
+**涉及文件**：`agent/src/trading/connectors/xtquant/sdk.py`
+
+---
+
+#### 9.1.2 连接泄漏 — `start()` 后无 `stop()` 保障
+
+**问题描述**：`XtQuantTrader.start()` 启动后台线程。当前 `_disconnect()` 调用了 `trader.stop()`，但没有 `atexit` 注册。如果 FastAPI 进程被 `SIGKILL` 或异常退出，后台线程不会被清理。`start()` → `connect()` 之间如果抛异常，`stop()` 不会执行。
+
+**严重程度**：建议
+
+**解决方案**：
+
+```python
+import atexit
+
+def _ensure_connected(config):
+    # ... 创建 trader ...
+    trader.start()
+    try:
+        connect_result = trader.connect()
+        if connect_result != 0:
+            raise XtQuantConnectionError(...)
+    except Exception:
+        trader.stop()
+        raise
+    _trader = trader
+    atexit.register(_disconnect)  # 只注册一次
+    return _trader
+```
+
+**涉及文件**：`agent/src/trading/connectors/xtquant/sdk.py`
+
+---
+
+#### 9.1.3 miniqmt 进程崩溃无法感知
+
+**问题描述**：如果 miniqmt 进程崩溃（Windows 蓝屏、进程被杀），Python 端的 `_trader` 引用仍然存在。后续调用会得到不可预测的错误。
+
+**严重程度**：重要
+
+**解决方案**：为所有 trader 操作增加健康探测 + 单次重连包装器：
+
+```python
+def _with_reconnect(func, config, *args, **kwargs):
+    try:
+        return func(*args, **kwargs)
+    except Exception as exc:
+        if _is_connection_error(exc):
+            logger.warning("xtquant connection error, attempting reconnect: %s", exc)
+            _disconnect()
+            _ensure_connected(config)
+            return func(*args, **kwargs)  # 重试一次
+        raise
+```
+
+**涉及文件**：`agent/src/trading/connectors/xtquant/sdk.py`
+
+---
+
+#### 9.1.4 Session 恢复缺失
+
+**问题描述**：Vibe-Trading 重启后 `_trader` 为 `None`，需重新连接。设计上 fail-closed 是安全的，但缺少状态恢复提示。
+
+**严重程度**：建议
+
+**解决方案**：在 `check_status()` 中检测上次使用的 profile，如果上次是 live 模式，返回 `reconnect_hint` 字段提示用户需要重新激活。
+
+**涉及文件**：`agent/src/trading/connectors/xtquant/sdk.py`
+
+---
+
+### 9.2 Paper 模拟真实性问题
+
+#### 9.2.1 Paper `place_order` 未真正对接 Shadow Account
+
+**问题描述**：⚠️ **致命问题**。当前 `_paper_place_order` 只是生成一个 `paper-{uuid}` 的 order_id 并返回 `{"status": "ok"}`——它**没有调用**任何模拟撮合逻辑。Paper 下单不会更新模拟持仓、不会模拟成交、也无法通过 `get_positions` 看到 paper 下的单。
+
+**严重程度**：🔴 **致命**
+
+**根因分析**：Shadow Account 模块的能力是「从 journal 提取 shadow profile」和「回测」，它本身不是一个内存撮合引擎。
+
+**解决方案**：在 `sdk.py` 中维护一个内存级 Paper Account 状态：
+
+```python
+_paper_positions: dict[str, PaperPosition] = {}
+_paper_orders: list[PaperOrder] = []
+_paper_cash: float = 1_000_000.0  # 初始模拟资金
+
+def _paper_place_order(...):
+    # 1. 从 xtdata 获取当前价格
+    # 2. 模拟成交（market 单立即成交，limit 单挂单）
+    # 3. 更新 _paper_positions / _paper_cash
+    # 4. 记录到 _paper_orders
+```
+
+推荐新增独立文件 `agent/src/trading/connectors/xtquant/paper_engine.py` 维护 Paper Account 状态机。
+
+**涉及文件**：
+- `agent/src/trading/connectors/xtquant/sdk.py` — 重构 `_paper_place_order`
+- `agent/src/trading/connectors/xtquant/paper_engine.py` — **新增** Paper Account 状态管理
+
+---
+
+#### 9.2.2 Paper 模式的读操作仍走 xtquant SDK
+
+**问题描述**：Paper profile 的 `get_positions`、`get_account_snapshot` 仍然调用 xtquant SDK 读取**真实账户**数据。Paper 模式暴露了实盘持仓和资金信息，且 paper 下单后 `get_positions` 不会显示刚下的 paper 订单。
+
+**严重程度**：重要
+
+**解决方案**：Paper profile 的读操作应返回模拟账户数据（来自 Paper Engine）。`get_quote` 和 `get_historical_bars` 可保留走 xtquant SDK。
+
+**涉及文件**：`agent/src/trading/connectors/xtquant/sdk.py`
+
+---
+
+#### 9.2.3 条件单在 Paper 模式无法工作
+
+**问题描述**：Paper Engine 无法处理止损、止盈等条件单。limit 单也没有价格监听和触发成交的机制。
+
+**严重程度**：建议
+
+**解决方案**：短期——Paper 模式 limit 单以当前 xtdata 行情价格立即判断能否成交，不能成交则标记为 `pending`；不支持条件单则返回明确错误。长期——引入后台线程定期检查 pending 订单。
+
+**涉及文件**：`agent/src/trading/connectors/xtquant/paper_engine.py`（新增）
+
+---
+
+### 9.3 安全链缺口
+
+#### 9.3.1 Profile override 可绕过 paper/live 隔离
+
+**问题描述**：`build_config` 的 `_OVERRIDE_KEYS` 包含 `"profile"`。调用者可以通过 overrides 覆盖 profile 值。攻击者可构造 `profile="paper"` 但 `mini_qmt_path` 指向真实环境的 config，在 paper TradingProfile 下获得 live config。
+
+**严重程度**：重要
+
+**解决方案**：
+1. 从 `_OVERRIDE_KEYS` 中移除 `"profile"`，禁止通过 overrides 修改 profile
+2. 在 `service.py` 的 paper 路径中增加断言：`assert config.profile == "paper"`
+3. 在 `place_order` 的 paper 分支中增加防御性检查
+
+**涉及文件**：
+- `agent/src/trading/connectors/xtquant/sdk.py`（`_OVERRIDE_KEYS`）
+- `agent/src/trading/service.py`（paper 路径校验）
+
+---
+
+#### 9.3.2 Kill Switch 无第二层防护
+
+**问题描述**：Kill Switch 依赖 `~/.vibe-trading/kill_switch/xtquant.halt` 文件存在。用户（或恶意程序）删除该文件后 Kill Switch 立即失效。
+
+**严重程度**：重要
+
+**解决方案**：增加内存级 Kill Switch 作为第二层防护：
+
+```python
+_memory_halt: dict[str, bool] = {}
+
+def halt_broker(broker: str):
+    _memory_halt[broker] = True
+    halt_flag_path(broker).touch()
+
+def is_halted(broker: str) -> bool:
+    return _memory_halt.get(broker, False) or halt_flag_set(broker)
+```
+
+**涉及文件**：`agent/src/live/halt.py`、`agent/src/live/sdk_order_gate.py`
+
+---
+
+#### 9.3.3 MCP Server 权限控制
+
+**问题描述**：MCP Server 暴露的工具如果包含 `place_order`，外部 AI 客户端可直接调用。MCP 协议无内置 ACL 机制。
+
+**严重程度**：重要
+
+**解决方案**：
+1. MCP Server 默认不暴露 `place_order` / `cancel_order` 工具
+2. 需通过环境变量 `VIBE_MCP_ENABLE_TRADING=true` 显式启用
+3. 即使启用，仍必须经过完整安全链
+
+**涉及文件**：`agent/mcp_server.py`
+
+---
+
+#### 9.3.4 T+1 规则完全未实现
+
+**问题描述**：⚠️ **致命问题**。文档中声明了 "T+1 检查：今日买入不可今日卖出"，但 `a_stock_guard.py` 中 T+1 规则**完全未实现**。这需要维护每只股票的买入日期缓存。
+
+**严重程度**：🔴 **致命**
+
+**根因分析**：T+1 规则需要跨请求状态（持仓买入日期），但当前 Order Guard 是无状态的纯函数。
+
+**解决方案**：
+
+```python
+def check_t_plus_1(symbol: str, side: str, connector_module, config) -> str | None:
+    if side != "sell":
+        return None
+    # 查询 xtquant 当日委托记录
+    orders = connector_module.get_open_orders(config, include_executions=True)
+    today = datetime.now().strftime("%Y%m%d")
+    for exec in orders.get("executions", []):
+        if exec["symbol"] == symbol and exec["side"] == "buy" and exec["time"].startswith(today):
+            return f"T+1 violation: {symbol} was bought today, cannot sell until tomorrow"
+    return None
+```
+
+需注意 ETF（如 510050.SH）支持 T+0，需在品种判断中区分。
+
+**涉及文件**：
+- `agent/src/live/a_stock_guard.py`
+- `agent/src/live/sdk_order_gate.py`
+
+---
+
+### 9.4 跨平台兼容问题
+
+#### 9.4.1 `service.py` 注册指向 `sdk_http` 非 `sdk`
+
+**问题描述**：`_SDK_CONNECTOR_MODULES["xtquant"]` 当前指向 `"src.trading.connectors.xtquant.sdk_http"`，不是 `sdk.py`。Windows 用户也会被迫使用 HTTP Bridge 而非直连。
+
+**严重程度**：重要
+
+**解决方案**：应根据运行平台动态选择：
+
+```python
+import platform
+_SDK_CONNECTOR_MODULES["xtquant"] = (
+    "src.trading.connectors.xtquant.sdk"
+    if platform.system() == "Windows"
+    else "src.trading.connectors.xtquant.sdk_http"
+)
+```
+
+**涉及文件**：`agent/src/trading/service.py`
+
+---
+
+#### 9.4.2 `sdk_http.py` 缺少 `place_order` / `cancel_order`
+
+**问题描述**：`sdk_http.py` 的 `__all__` 不包含 `place_order` 和 `cancel_order`。HTTP 模式下调用 `module.place_order` 会 `AttributeError`。
+
+**严重程度**：重要
+
+**解决方案**：在 `sdk_http.py` 中实现 `place_order` / `cancel_order`，通过 HTTP POST 转发到 QMT Bridge 的下单端点。或在 `service.py` 中对 HTTP transport 禁止写操作。
+
+**涉及文件**：`agent/src/trading/connectors/xtquant/sdk_http.py`
+
+---
+
+#### 9.4.3 xtquant 安装依赖非 PyPI 包
+
+**问题描述**：`pyproject.toml` 中声明 `xtquant = ["xtquant"]` 作为可选依赖，但 xtquant **不在 PyPI 上**。用户 `pip install vibe-trading-ai[xtquant]` 会失败。
+
+**严重程度**：重要
+
+**解决方案**：
+1. `pyproject.toml` 中移除 `xtquant` 可选依赖（因不可 pip install）
+2. 在文档和错误提示中说明安装方式：从 QMT 安装目录复制或 `pip install /path/to/xtquant-xxx.whl`
+3. 保持 `_import_xtquant()` 的友好错误信息
+
+**涉及文件**：`pyproject.toml`
+
+---
+
+### 9.5 数据层集成问题
+
+#### 9.5.1 Loader Fallback 链数据不一致
+
+**问题描述**：同只 A 股代码，tushare/akshare/xtdata 可能返回不同的 OHLCV 数据（复权方式不同、时间戳差异）。`auto` 模式回退时，不同 Loader 数据导致回测结果不可比较。
+
+**严重程度**：建议
+
+**解决方案**：
+1. 在 Loader Registry 中标准化复权方式参数
+2. xtdata Loader 的 `load()` 方法接受 `adjust` 参数并映射到 `dividend_type`
+3. 在回测报告中记录实际使用的 Loader 和复权方式
+
+**涉及文件**：`agent/backtest/loaders/xtdata_loader.py`
+
+---
+
+#### 9.5.2 全局锁导致并发回测瓶颈
+
+**问题描述**：`_xtdata_lock` 是全局锁，`download_history_data` 是阻塞同步调用。多标的回测场景下所有操作串行执行。300 只股票每只下载 2 秒需 10 分钟。
+
+**严重程度**：重要
+
+**解决方案**：
+1. **批量下载**：xtdata 支持批量 `download_history_data` 多只股票
+2. **细化锁粒度**：将 download 和 read 分离
+3. **预下载缓存预热**：回测开始前一次性下载所有标的
+
+```python
+def prefetch_batch(symbols: list[str], period: str, start: str, end: str):
+    with _xtdata_lock:
+        for sym in symbols:
+            xtdata.download_history_data(sym, period, start, end)
+```
+
+**涉及文件**：`agent/backtest/loaders/xtdata_loader.py`
+
+---
+
+#### 9.5.3 xtdata 本地缓存管理缺失
+
+**问题描述**：xtdata 的本地缓存可能膨胀到数 GB。用户没有从 Vibe-Trading 侧管理缓存的手段。
+
+**严重程度**：建议
+
+**解决方案**：提供 CLI 命令：
+```bash
+vibe-trading cache info --source xtdata    # 显示缓存路径和大小
+vibe-trading cache clear --source xtdata   # 清除缓存
+```
+
+**涉及文件**：`agent/cli/commands/` 下新增缓存管理命令
+
+---
+
+### 9.6 监控与可观测性
+
+#### 9.6.1 连接健康检测无定时心跳
+
+**问题描述**：`check_status()` 被动调用，无后台心跳线程。连接断开后用户只有在下一次操作时才会发现。
+
+**严重程度**：建议
+
+**解决方案**：在 `api_server.py` 的心跳端点中加入 xtquant 连接检查。
+
+**涉及文件**：`agent/api_server.py`
+
+---
+
+#### 9.6.2 审计日志未区分 paper/live 操作来源
+
+**问题描述**：Paper 操作只做了 `logger.info`，未写入审计日志。审计记录中也没有 `environment` 字段区分 paper/live。
+
+**严重程度**：建议
+
+**解决方案**：在审计记录中增加 `environment` 字段。
+
+**涉及文件**：`agent/src/live/sdk_order_gate.py`、`agent/src/trading/connectors/xtquant/sdk.py`
+
+---
+
+### 9.7 配置管理与用户体验
+
+#### 9.7.1 多账号支持缺失
+
+**问题描述**：`XtQuantConfig` 只支持单个 `account_id`。用户有多个 QMT 账号时无法方便切换。
+
+**严重程度**：建议
+
+**解决方案**：在 `xtquant.json` 中支持 `accounts` 数组，通过 `--account` CLI 参数切换。
+
+**涉及文件**：`agent/src/trading/connectors/xtquant/sdk.py`
+
+---
+
+#### 9.7.2 首次设置引导流程缺失
+
+**问题描述**：用户首次使用 xtquant 时需手动创建配置文件，无交互式引导。
+
+**严重程度**：建议
+
+**解决方案**：在 `vibe-trading setup` 中增加交互式引导：
+1. 自动扫描常见 QMT 安装路径
+2. 引导确认路径
+3. 自动发现账号
+
+**涉及文件**：`agent/cli/onboard.py`
+
+---
+
+### 9.8 API 兼容性与版本管理
+
+#### 9.8.1 xtquant 属性名硬编码无版本检查
+
+**问题描述**：`sdk.py` 中大量使用 `_attr(obj, "total_asset")` 等硬编码属性名。xtquant 版本升级可能改变属性名。
+
+**严重程度**：建议
+
+**解决方案**：在 `check_status` 中检测 xtquant 版本，定义已测试版本范围，对未知版本输出警告。
+
+**涉及文件**：`agent/src/trading/connectors/xtquant/sdk.py`
+
+---
+
+#### 9.8.2 `order_stock` 参数组合未验证
+
+**问题描述**：`order_stock` 调用中常量组合是否正确未经验证。不同 xtquant 版本的参数签名可能不同。
+
+**严重程度**：重要
+
+**解决方案**：添加 `_validate_order_params` 函数在调用前验证参数组合。用 try-except 捕获 `order_stock` 异常并输出友好错误信息。
+
+**涉及文件**：`agent/src/trading/connectors/xtquant/sdk.py`
+
+---
+
+### 9.9 问题修复优先级排序
+
+| 优先级 | 问题 | 严重程度 | 影响范围 | 修复难度 |
+|---|---|---|---|---|
+| **P0** | 9.2.1 Paper `place_order` 未对接 Shadow Account | 🔴 致命 | Paper 模式功能完全失效 | 高 |
+| **P0** | 9.3.4 T+1 规则完全未实现 | 🔴 致命 | A 股卖出无 T+1 保护 | 中 |
+| **P1** | 9.3.1 Profile override 可绕过 paper/live 隔离 | 重要 | 安全边界 | 低 |
+| **P1** | 9.4.1 `service.py` 注册指向 `sdk_http` 非 `sdk` | 重要 | Windows 直连不可用 | 低 |
+| **P1** | 9.4.2 `sdk_http.py` 缺少 `place_order`/`cancel_order` | 重要 | HTTP 模式下单不可用 | 中 |
+| **P1** | 9.1.1 `_ensure_connected` 线程不安全 | 重要 | 并发崩溃风险 | 低 |
+| **P1** | 9.1.3 miniqmt 崩溃无法感知 + 无重连 | 重要 | 连接可靠性 | 中 |
+| **P1** | 9.2.2 Paper 读操作暴露实盘数据 | 重要 | Paper/Live 隔离不完整 | 中 |
+| **P1** | 9.3.2 Kill Switch 无第二层防护 | 重要 | 安全兜底 | 低 |
+| **P1** | 9.3.3 MCP Server 权限控制 | 重要 | 外部攻击面 | 低 |
+| **P1** | 9.4.3 xtquant 非 PyPI 依赖 | 重要 | 安装失败 | 低 |
+| **P1** | 9.5.2 全局锁导致并发回测瓶颈 | 重要 | 性能 | 中 |
+| **P1** | 9.8.2 `order_stock` 参数组合未验证 | 重要 | 下单可靠性 | 低 |
+| **P2** | 9.1.2 连接泄漏无 atexit | 建议 | 资源泄漏 | 低 |
+| **P2** | 9.1.4 Session 恢复无提示 | 建议 | 用户体验 | 低 |
+| **P2** | 9.2.3 条件单不支持 | 建议 | 功能完整性 | 高 |
+| **P2** | 9.5.1 Loader 复权方式不一致 | 建议 | 数据一致性 | 中 |
+| **P2** | 9.5.3 缓存管理缺失 | 建议 | 用户体验 | 低 |
+| **P2** | 9.6.1 无定时心跳 | 建议 | 可观测性 | 低 |
+| **P2** | 9.6.2 审计日志无 environment 字段 | 建议 | 合规 | 低 |
+| **P2** | 9.7.1 多账号支持 | 建议 | 功能完整性 | 中 |
+| **P2** | 9.7.2 首次设置引导 | 建议 | 用户体验 | 中 |
+| **P2** | 9.8.1 属性名无版本检查 | 建议 | 兼容性 | 低 |
+
+#### 建议修复路线
+
+```
+阶段 1 — 立即修复 P0（2 个致命问题）
+├── Paper Engine 实现（_paper_place_order + paper_engine.py）
+└── T+1 规则实现（a_stock_guard.py）
+
+阶段 2 — 安全修复 P1（前 5 个）
+├── Profile 隔离加固（移除 profile override）
+├── service.py 注册修正（动态选择 sdk/sdk_http）
+├── sdk_http 补全 place_order/cancel_order
+├── 线程安全（加 _trader_lock）
+└── 重连机制（_with_reconnect 包装器）
+
+阶段 3 — 基础设施 P1（后 4 个）
+├── Kill Switch 双层防护（内存 + 文件）
+├── MCP 权限控制（VIBE_MCP_ENABLE_TRADING）
+├── 依赖管理（pyproject.toml 修正）
+└── 回测性能优化（批量预下载）
+
+阶段 4 — P2 逐步迭代
+├── atexit 注册 / Session 提示
+├── 缓存管理 CLI
+├── 多账号支持
+├── 首次设置引导
+├── 版本兼容检查
+└── 条件单支持（远期）
+```
+
+> 📎 **未修复问题追踪**：[TODO-xtquant.md](TODO-xtquant.md) — 当前剩余 5 项未修复（P0×1, P1×3, P2×1）
 
 ---
 

@@ -47,6 +47,7 @@ _INSTALL_HINTS: dict[str, str] = {
     "weixin": "No extra Python package required; configure channels.weixin in the agent config.",
     "whatsapp": "pip install 'vibe-trading-ai[whatsapp]'",
     "websocket": "pip install 'vibe-trading-ai[channels]'",
+    "xiaoyi": "pip install 'vibe-trading-ai[xiaoyi]'  # 或 pip install httpx",
 }
 
 _AVAILABILITY_FLAGS: dict[str, tuple[str, ...]] = {

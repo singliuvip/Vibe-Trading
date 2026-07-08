@@ -13,6 +13,8 @@ RUNNER_CAPABILITY = "runner.manage.requires_mandate"
 #: Each module exposes a uniform read interface (``build_config``, ``check_status``,
 #: ``get_account_snapshot``, ``get_positions``, ``get_open_orders``, ``get_quote``,
 #: ``get_historical_bars``).
+#:
+#: xtquant uses native ``import xtquant`` SDK (Windows only).
 _SDK_CONNECTOR_MODULES = {
     "tiger": "src.trading.connectors.tiger.sdk",
     "longbridge": "src.trading.connectors.longbridge.sdk",
@@ -23,12 +25,17 @@ _SDK_CONNECTOR_MODULES = {
     "dhan": "src.trading.connectors.dhan.sdk",
     "shoonya": "src.trading.connectors.shoonya.sdk",
     "trading212": "src.trading.connectors.trading212.sdk",
-    "xtquant": "src.trading.connectors.xtquant.sdk_http",
+    "xtquant": "src.trading.connectors.xtquant.sdk",
 }
 
 
-def _sdk_module(connector: str):
-    """Import the SDK connector module for a ``broker_sdk`` connector key."""
+def _sdk_module(connector: str, transport: str = "broker_sdk"):
+    """Import the SDK connector module for a ``broker_sdk`` connector key.
+
+    Each connector has a single SDK module that handles all profiles for that
+    broker.  Callers do not need to know which transport is active — the module
+    resolves paper vs live internally via the profile config.
+    """
     import importlib
 
     path = _SDK_CONNECTOR_MODULES.get(connector)
@@ -52,7 +59,7 @@ def check_connection(profile_id: str | None = None, **overrides: Any) -> dict[st
         return report
 
     if profile.transport in ("broker_sdk", "broker_http"):
-        module = _sdk_module(profile.connector)
+        module = _sdk_module(profile.connector, profile.transport)
         report = module.check_status(module.build_config(profile.config, overrides))
         report["profile_id"] = profile.id
         report["connector"] = profile.connector
@@ -71,7 +78,7 @@ def get_account(profile_id: str | None = None, **overrides: Any) -> dict[str, An
 
         return _with_profile(profile, get_account_snapshot(_ibkr_config(profile, overrides)))
     if profile.transport in ("broker_sdk", "broker_http"):
-        module = _sdk_module(profile.connector)
+        module = _sdk_module(profile.connector, profile.transport)
         return _with_profile(profile, module.get_account_snapshot(module.build_config(profile.config, overrides)))
     return _call_remote(profile, "account", {})
 
@@ -84,7 +91,7 @@ def get_positions(profile_id: str | None = None, **overrides: Any) -> dict[str, 
 
         return _with_profile(profile, _get_positions(_ibkr_config(profile, overrides)))
     if profile.transport in ("broker_sdk", "broker_http"):
-        module = _sdk_module(profile.connector)
+        module = _sdk_module(profile.connector, profile.transport)
         return _with_profile(profile, module.get_positions(module.build_config(profile.config, overrides)))
     return _call_remote(profile, "positions", {})
 
@@ -105,7 +112,7 @@ def get_open_orders(
             _get_open_orders(_ibkr_config(profile, overrides), include_executions=include_executions),
         )
     if profile.transport in ("broker_sdk", "broker_http"):
-        module = _sdk_module(profile.connector)
+        module = _sdk_module(profile.connector, profile.transport)
         return _with_profile(
             profile,
             module.get_open_orders(
@@ -140,7 +147,7 @@ def get_quote(
             ),
         )
     if profile.transport in ("broker_sdk", "broker_http"):
-        module = _sdk_module(profile.connector)
+        module = _sdk_module(profile.connector, profile.transport)
         return _with_profile(profile, module.get_quote(symbol, config=module.build_config(profile.config, overrides)))
     return _call_remote(profile, "quote", {"symbols": [symbol], "symbol": symbol})
 
@@ -186,7 +193,7 @@ def get_history(
             ),
         )
     if profile.transport in ("broker_sdk", "broker_http"):
-        module = _sdk_module(profile.connector)
+        module = _sdk_module(profile.connector, profile.transport)
         return _with_profile(
             profile,
             module.get_historical_bars(
@@ -267,7 +274,7 @@ def place_order(
     if profile.readonly:
         return _unsupported(profile, "orders.place")
 
-    module = _sdk_module(profile.connector)
+    module = _sdk_module(profile.connector, profile.transport)
     config = module.build_config(profile.config, overrides)
     place_kwargs = {
         "symbol": symbol,
@@ -326,7 +333,7 @@ def cancel_order(
         return _unsupported(profile, "orders.cancel")
     if profile.readonly:
         return _unsupported(profile, "orders.cancel")
-    module = _sdk_module(profile.connector)
+    module = _sdk_module(profile.connector, profile.transport)
     config = module.build_config(profile.config, overrides)
     result = module.cancel_order(config, order_id, symbol=symbol)
     if profile.environment == "live":

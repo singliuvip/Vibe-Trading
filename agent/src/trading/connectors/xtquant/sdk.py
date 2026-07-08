@@ -409,6 +409,9 @@ def check_status(config: XtQuantConfig | None = None) -> dict[str, Any]:
         _ensure_connected(cfg)
         report["connected"] = True
         report["account_id"] = _mask_id(_resolve_account_id(cfg))
+        report["account_id_raw"] = _resolve_account_id(cfg)
+        report["account_type"] = cfg.account_type
+        report["heartbeat"] = get_heartbeat_status()
     except XtQuantConnectionError as exc:
         report["status"] = "error"
         report["error"] = str(exc)
@@ -433,6 +436,7 @@ def get_account_snapshot(config: XtQuantConfig | None = None) -> dict[str, Any]:
     return {
         "status": "ok",
         "account_id": _mask_id(cfg.account_id or _resolve_account_id(cfg)),
+        "account_type": cfg.account_type,
         "total_value": _attr(raw, "total_asset", 0.0),
         "cash": _attr(raw, "cash", 0.0),
         "market_value": _attr(raw, "market_value", 0.0),
@@ -513,6 +517,13 @@ def get_open_orders(
 def get_quote(symbol: str, *, config: XtQuantConfig | None = None, **_: Any) -> dict[str, Any]:
     """Fetch a real-time quote via ``xtdata.get_full_tick()``."""
     cfg = config or load_config()
+    if cfg.profile in ("paper", "paper-trade"):
+        return {
+            "status": "error",
+            "symbol": symbol,
+            "error": "get_quote requires a live miniQMT connection. "
+                     "Use xtquant-live-readonly or xtquant-live-trade profile.",
+        }
     _, xtdata = _ensure_connected(cfg)
     tick = _with_reconnect(cfg, xtdata.get_full_tick, [symbol])
 
@@ -550,6 +561,13 @@ def get_historical_bars(
     ``xtdata.get_local_data()``.
     """
     cfg = config or load_config()
+    if cfg.profile in ("paper", "paper-trade"):
+        return {
+            "status": "error",
+            "symbol": symbol,
+            "error": "get_historical_bars requires a live miniQMT connection. "
+                     "Use xtquant-live-readonly or xtquant-live-trade profile.",
+        }
     _, xtdata = _ensure_connected(cfg)
 
     from datetime import datetime, timedelta
@@ -775,6 +793,9 @@ def probe_connection(config: XtQuantConfig | None = None) -> dict[str, Any]:
     This is called by ``api_server.py``'s ``_sdk_heartbeat_probe()``.
     """
     cfg = config or load_config()
+    # Paper profiles don't need a live miniQMT connection.
+    if cfg.profile in ("paper", "paper-trade"):
+        return {"status": "ok", "connected": False, "note": "paper profile — no probe needed"}
     try:
         _check_platform()
         _import_xtquant()

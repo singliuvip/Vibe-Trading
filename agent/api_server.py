@@ -1672,7 +1672,7 @@ def _sdk_connector_status(broker: str) -> Optional[dict]:
     up with an active ``probe_connection()`` to verify the miniQMT link is
     still responsive (§9.6.1 heartbeat).
     """
-    from src.trading.service import _SDK_CONNECTOR_MODULES
+    from src.trading.service import _SDK_CONNECTOR_MODULES, live_runner_profile_for_broker
 
     if broker not in _SDK_CONNECTOR_MODULES:
         return None
@@ -1681,20 +1681,55 @@ def _sdk_connector_status(broker: str) -> Optional[dict]:
     try:
         import importlib
         mod = importlib.import_module(_SDK_CONNECTOR_MODULES[broker])
-        result = mod.check_status(mod.build_config({}, {}))
+
+        # Resolve the live profile and merge it with any on-disk config
+        # (~/.vibe-trading/xtquant.json) so that mini_qmt_path, account_id,
+        # and other connection settings are picked up.
+        profile = live_runner_profile_for_broker(broker)
+        profile_overrides = dict(profile.config) if profile else {}
+
+        import json
+        from src.config.paths import get_runtime_root
+
+        config_path = get_runtime_root() / "xtquant.json"
+        disk_data: dict = {}
+        if config_path.exists():
+            try:
+                disk_data = json.loads(config_path.read_text(encoding="utf-8"))
+            except Exception:
+                logger.debug("failed to read xtquant config for %s", broker, exc_info=True)
+
+        config = mod.build_config(disk_data, profile_overrides)
+
+        result = mod.check_status(config)
         safe = {"status": result.get("status"), "platform": result.get("platform")}
+
+        # Account data: prefer check_status embedded account, fall back to
+        # a dedicated get_account_snapshot call (needed for xtquant).
         account = result.get("account")
+        if not isinstance(account, dict):
+            snapshot_fn = getattr(mod, "get_account_snapshot", None)
+            if snapshot_fn and result.get("status") == "ok":
+                try:
+                    snap = snapshot_fn(config)
+                    if isinstance(snap, dict):
+                        account = {
+                            "account_id": snap.get("account_id", ""),
+                            "total_value": snap.get("total_value"),
+                            "cash": snap.get("cash"),
+                            "market_value": snap.get("market_value"),
+                        }
+                except Exception:
+                    logger.debug("account snapshot failed for %s", broker, exc_info=True)
+
         if isinstance(account, dict):
             safe["account"] = {k: v for k, v in account.items() if k in ("account_id", "total_value", "cash", "market_value")}
+
         if result.get("status") != "ok":
             safe["error"] = result.get("error", "unknown")
         else:
             # ── Active heartbeat probe (§9.6.1) ──
-            # For xtquant, call probe_connection() to verify the miniQMT link
-            # is alive.  A stale _trader can survive a process restart without
-            # the underlying IPC still being connected.
             safe["heartbeat"] = _sdk_heartbeat_probe(broker, mod)
-
             # Write SDK heartbeat so runner liveness detects this broker as alive
             try:
                 from src.live.runtime.liveness import write_heartbeat
@@ -1718,7 +1753,7 @@ def _sdk_heartbeat_probe(broker: str, mod: Any) -> str:
         return "not_supported"
     try:
         alive = probe_fn()
-        return "ok" if alive else "unresponsive"
+        return "ok" if isinstance(alive, dict) and alive.get("status") == "ok" else "unresponsive"
     except Exception:
         logger.debug("sdk heartbeat probe failed for %s", broker, exc_info=True)
         return "unresponsive"

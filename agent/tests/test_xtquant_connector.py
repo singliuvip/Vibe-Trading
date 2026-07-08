@@ -18,9 +18,13 @@ from src.trading.connectors.xtquant.sdk import (
     build_config,
     cancel_order,
     check_status,
+    get_account_snapshot,
+    get_historical_bars,
+    get_quote,
     get_today_trades,
     load_config,
     place_order,
+    probe_connection,
 )
 
 
@@ -259,3 +263,83 @@ class TestGetTodayTrades:
         assert len(result["trades"]) == 1
         assert result["trades"][0]["symbol"] == "600036.SH"
         assert result["trades"][0]["side"] == "buy"
+
+
+class TestCheckStatusLiveFields:
+    """check_status live-mode extra fields."""
+
+    @mock.patch("src.trading.connectors.xtquant.sdk._ensure_connected")
+    @mock.patch("src.trading.connectors.xtquant.sdk._resolve_account_id", return_value="10888003")
+    @mock.patch("src.trading.connectors.xtquant.sdk._import_xtquant")
+    @mock.patch("src.trading.connectors.xtquant.sdk._check_platform")
+    @mock.patch("src.trading.connectors.xtquant.sdk.platform.system", return_value="Windows")
+    def test_live_status_includes_extra_fields(self, _ps, _cp, _import, _resolve, _connect):
+        """Verify check_status live mode returns account_type, account_id_raw, heartbeat."""
+        from src.trading.connectors.xtquant.sdk import get_heartbeat_status
+        cfg = XtQuantConfig(profile="live-readonly", mini_qmt_path="D:\\QMT", account_type="STOCK")
+        result = check_status(cfg)
+        assert result["status"] == "ok"
+        assert result["connected"] is True
+        assert result["account_type"] == "STOCK"
+        assert result["account_id_raw"] == "10888003"
+        assert "heartbeat" in result
+
+
+class TestGetAccountSnapshotLive:
+    """get_account_snapshot live-mode extra fields."""
+
+    @mock.patch("src.trading.connectors.xtquant.sdk._ensure_connected")
+    @mock.patch("src.trading.connectors.xtquant.sdk._resolve_account_id", return_value="10888003")
+    @mock.patch("src.trading.connectors.xtquant.sdk._import_xtquant")
+    @mock.patch("src.trading.connectors.xtquant.sdk._check_platform")
+    @mock.patch("src.trading.connectors.xtquant.sdk.platform.system", return_value="Windows")
+    def test_live_account_snapshot_includes_account_type(self, _ps, _cp, _import, _resolve, mock_connect):
+        """Verify get_account_snapshot live mode returns account_type."""
+        mock_trader = mock.MagicMock()
+        mock_asset = mock.MagicMock()
+        mock_asset.total_asset = 150000.0
+        mock_asset.cash = 50000.0
+        mock_asset.market_value = 100000.0
+        mock_trader.query_stock_asset.return_value = mock_asset
+        mock_connect.return_value = (mock_trader, None)
+
+        cfg = XtQuantConfig(profile="live-readonly", mini_qmt_path="D:\\QMT", account_type="FUTURES")
+        result = get_account_snapshot(cfg)
+        assert result["status"] == "ok"
+        assert result["account_type"] == "FUTURES"
+        assert result["total_value"] == 150000.0
+
+
+class TestProbeConnectionPaper:
+    """probe_connection paper mode early return."""
+
+    @mock.patch("src.trading.connectors.xtquant.sdk.load_config")
+    def test_probe_connection_paper_returns_early(self, mock_load):
+        """Verify probe_connection returns early for paper profiles without connecting."""
+        mock_load.return_value = XtQuantConfig(profile="paper")
+        result = probe_connection(XtQuantConfig(profile="paper"))
+        assert result["status"] == "ok"
+        assert result["connected"] is False
+        assert "no probe needed" in result["note"]
+
+
+class TestQuotePaper:
+    """get_quote paper mode error."""
+
+    def test_get_quote_paper_returns_error(self):
+        """Verify get_quote returns error for paper profiles."""
+        cfg = XtQuantConfig(profile="paper")
+        result = get_quote("000001.SZ", config=cfg)
+        assert result["status"] == "error"
+        assert "live miniQMT connection" in result["error"]
+
+
+class TestHistoricalBarsPaper:
+    """get_historical_bars paper mode error."""
+
+    def test_get_historical_bars_paper_returns_error(self):
+        """Verify get_historical_bars returns error for paper profiles."""
+        cfg = XtQuantConfig(profile="paper")
+        result = get_historical_bars("000001.SZ", config=cfg, period="1d", limit=30)
+        assert result["status"] == "error"
+        assert "live miniQMT connection" in result["error"]

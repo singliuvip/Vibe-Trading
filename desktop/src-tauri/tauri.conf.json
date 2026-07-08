@@ -6,7 +6,7 @@
     "frontendDist": "../../frontend/dist",
     "devUrl": "http://localhost:8899",
     "beforeDevCommand": "",
-    "beforeBuildCommand": "cd ../../frontend && npm run build"
+    "beforeBuildCommand": "npm run build --prefix c:/Project/Vibe-Trading/frontend"
   },
   "app": {
     "windows": [
@@ -24,7 +24,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["windows", "macos", "linux"],
+    "targets": ["nsis"],
     "icon": [
       "icons/icon.svg",
       "icons/icon.png",
@@ -36,15 +36,11 @@
       "timestampUrl": "",
       "nsis": {
         "installerIcon": "icons/icon.ico",
-        "uninstallerIcon": "icons/icon.ico",
-        "headerIcon": "icons/icon.ico",
-        "dialogIcon": "icons/icon.ico"
+        "uninstallerIcon": "icons/icon.ico"
       }
     },
     "macOS": {
-      "certificateThumbprint": null,
       "signingIdentity": null,
-      "provisioningProfile": null,
       "minimumSystemVersion": "11.0",
       "entitlements": null
     },
@@ -57,15 +53,6 @@
     }
   },
   "plugins": {
-    "shell": {
-      "sidecar": [],
-      "scope": [
-        {
-          "name": "vibe-trading",
-          "cmd": "vibe-trading",
-          "args": true
-        }
-      ]
-    }
+    "shell": {}
   }
 }

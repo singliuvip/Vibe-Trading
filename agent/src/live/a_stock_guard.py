@@ -159,3 +159,64 @@ def build_validation_from_quote(
         upper_limit=upper,
         lower_limit=lower,
     )
+
+
+# ------------------------------------------------------------------ #
+# T+0 / T+1 settlement
+# ------------------------------------------------------------------ #
+
+# T+0 eligible instrument prefixes (ETF, 可转债等)
+_T0_PREFIXES: tuple[str, ...] = (
+    "51",   # 510xxx.SH ETF (上证)
+    "159",  # 159xxx.SZ ETF (深证)
+    "512",  # 512xxx.SH 行业ETF
+    "513",  # 513xxx.SH 跨境ETF
+    "515",  # 515xxx.SH 主题ETF
+    "518",  # 518xxx.SH 黄金ETF
+    "52",   # 52xxxx.SH ETF / 可转债
+    "11",   # 11xxxx.SZ 可转债
+    "12",   # 12xxxx.SZ 可转债
+)
+
+
+def is_t0_eligible(symbol: str) -> bool:
+    """Check if a symbol is T+0 eligible (ETF, 可转债).
+
+    A-share stocks are T+1 (cannot sell shares bought today).
+    ETFs and 可转债 support T+0 settlement.
+    """
+    code = symbol.split(".")[0] if "." in symbol else symbol
+    return any(code.startswith(prefix) for prefix in _T0_PREFIXES)
+
+
+def check_t_plus_1(
+    symbol: str,
+    side: str,
+    today_buys: list[dict],
+) -> str | None:
+    """Check T+1 settlement rule for A-share sell orders.
+
+    Args:
+        symbol: Stock code in XXXXXX.SH/.SZ/.BJ format.
+        side: ``buy`` or ``sell``.
+        today_buys: List of today's buy execution dicts, each with
+            at least ``symbol`` and ``side`` keys.
+
+    Returns:
+        Violation description string if the order violates T+1,
+        ``None`` if the order is allowed.
+    """
+    if side != "sell":
+        return None
+
+    if is_t0_eligible(symbol):
+        return None
+
+    for exec_ in today_buys:
+        if exec_.get("symbol") == symbol and exec_.get("side") == "buy":
+            return (
+                f"T+1 violation: {symbol} was bought today, "
+                f"cannot sell until the next trading day"
+            )
+
+    return None

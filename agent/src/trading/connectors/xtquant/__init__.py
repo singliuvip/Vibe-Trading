@@ -25,12 +25,17 @@ from src.trading.connectors.xtquant.sdk import (  # noqa: F401
     cancel_order,
     check_status,
     get_account_snapshot,
+    get_heartbeat_status,
     get_historical_bars,
     get_open_orders,
     get_positions,
     get_quote,
+    get_today_trades,
     load_config,
     place_order,
+    probe_connection,
+    start_heartbeat,
+    stop_heartbeat,
 )
 
 from src.trading.connectors.xtquant.paper_engine import (  # noqa: F401

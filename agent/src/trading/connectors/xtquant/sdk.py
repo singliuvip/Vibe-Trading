@@ -36,7 +36,7 @@ import platform
 import re
 import threading
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -97,6 +97,25 @@ class XtQuantConfig:
     timeout: float = 10.0
     readonly: bool = True
 
+    @classmethod
+    def from_mapping(cls, data: dict[str, Any] | None = None) -> "XtQuantConfig":
+        """Construct config from a dict (convenience wrapper around build_config)."""
+        return build_config(data)
+
+    @property
+    def is_live(self) -> bool:
+        """True if this is a live (non-paper) profile."""
+        return self.profile in ("live-readonly", "live-trade", "live")
+
+    @property
+    def environment(self) -> str:
+        """Return ``"live"`` or ``"paper"`` based on profile."""
+        return "live" if self.is_live else "paper"
+
+    def with_overrides(self, **overrides: Any) -> "XtQuantConfig":
+        """Return a new config with the given fields overridden."""
+        return replace(self, **overrides)
+
 
 # ---------------------------------------------------------------------------
 # Config loading
@@ -121,13 +140,20 @@ def build_config(data: dict[str, Any] | None = None, overrides: dict[str, Any] |
     if overrides:
         payload.update(overrides)
 
+    profile = str(payload.get("profile") or _env_or_default("PROFILE", "paper")).strip().lower()
+    _valid_profiles = {"paper", "paper-trade", "live-readonly", "live-trade", "live"}
+    if profile not in _valid_profiles:
+        raise XtQuantConfigError(
+            f"Invalid profile {profile!r}. Must be one of: {', '.join(sorted(_valid_profiles))}"
+        )
+
     return XtQuantConfig(
         mini_qmt_path=str(
             payload.get("mini_qmt_path") or _env_or_default("MINI_QMT_PATH", "")
         ).strip(),
         account_id=str(payload.get("account_id") or _env_or_default("ACCOUNT_ID", "")).strip(),
         account_type=str(payload.get("account_type") or _env_or_default("ACCOUNT_TYPE", "STOCK")).strip(),
-        profile=str(payload.get("profile") or _env_or_default("PROFILE", "paper")).strip().lower(),
+        profile=profile,
         session_id=int(payload.get("session_id") or 0),
         timeout=float(payload.get("timeout") or _env_or_default("TIMEOUT", "10.0")),
         readonly=bool(payload.get("readonly", True)),
@@ -141,8 +167,12 @@ def load_config() -> XtQuantConfig:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             return build_config(data)
-        except (OSError, json.JSONDecodeError) as exc:
+        except OSError as exc:
             logger.warning("Failed to load %s: %s", path, exc)
+        except json.JSONDecodeError as exc:
+            raise XtQuantConfigError(
+                f"Invalid JSON in {path}: {exc}"
+            ) from exc
     return build_config()
 
 
@@ -243,6 +273,7 @@ def _disconnect() -> None:
     """Tear down the XtQuantTrader singleton."""
     global _trader_instance, _trader_config_hash, _xtdata_instance  # noqa: PLW0603
     with _trader_lock:
+        stop_heartbeat()
         if _trader_instance is not None:
             try:
                 _trader_instance.stop()
@@ -664,4 +695,167 @@ def cancel_order(
         "status": "ok",
         "order_id": str(order_id),
         "profile": cfg.profile,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Today's trades (for T+1 guard)
+# ---------------------------------------------------------------------------
+
+
+def get_today_trades(config: XtQuantConfig | None = None) -> dict[str, Any]:
+    """Fetch today's trade executions from xtquant.
+
+    Uses ``XtQuantTrader.get_order_stock_trades()`` to retrieve the list of
+    filled trades for the current trading day.  Paper profiles return an empty
+    list (PaperEngine does not track intraday trades by default).
+
+    This is used by the A-stock T+1 guard to determine whether a symbol was
+    bought today.
+
+    Returns:
+        Dict with ``status``, ``trades`` (list of trade dicts with
+        ``symbol``, ``side``, ``time`` fields).
+    """
+    cfg = config or load_config()
+    if cfg.profile in ("paper", "paper-trade"):
+        return {"status": "ok", "trades": []}
+
+    try:
+        trader, _ = _ensure_connected(cfg)
+        acc = _to_stock_account(cfg)
+        raw = _with_reconnect(cfg, trader.get_order_stock_trades, acc)
+    except Exception as exc:
+        logger.warning("get_today_trades failed: %s", exc)
+        # Fail-closed: return empty list, caller will log a warning
+        return {"status": "error", "error": str(exc), "trades": []}
+
+    trades: list[dict[str, Any]] = []
+    if raw is not None and hasattr(raw, "__iter__") and not isinstance(raw, (str, bytes)):
+        for t in raw:
+            trades.append({
+                "symbol": _attr(t, "stock_code", ""),
+                "side": "buy" if _attr(t, "direction", 0) == 1 else "sell",
+                "time": str(_attr(t, "trade_time", _attr(t, "time", ""))),
+            })
+
+    return {"status": "ok", "trades": trades}
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat / connection probing
+# ---------------------------------------------------------------------------
+
+import time as _time_module
+
+_heartbeat_thread: threading.Thread | None = None
+_heartbeat_stop = threading.Event()
+_last_heartbeat_result: dict[str, Any] = {}
+_last_heartbeat_time: float = 0.0
+
+
+def probe_connection(config: XtQuantConfig | None = None) -> dict[str, Any]:
+    """Lightweight connection probe for the heartbeat system.
+
+    Returns a dict with ``status`` (``"ok"`` | ``"error"``) and optional
+    ``error`` message.  Never raises.
+
+    This is called by ``api_server.py``'s ``_sdk_heartbeat_probe()``.
+    """
+    cfg = config or load_config()
+    try:
+        _check_platform()
+        _import_xtquant()
+        trader, _ = _ensure_connected(cfg)
+        # Lightweight operation to verify the connection is alive
+        acc = _to_stock_account(cfg)
+        result = trader.query_stock_asset(acc)
+        if result is not None:
+            return {"status": "ok", "connected": True}
+        return {"status": "error", "error": "query_stock_asset returned None", "connected": False}
+    except XtQuantPlatformError:
+        return {"status": "ok", "connected": False, "note": "non-Windows platform"}
+    except XtQuantDependencyError:
+        return {"status": "ok", "connected": False, "note": "xtquant not installed"}
+    except Exception as exc:
+        logger.warning("xtquant probe_connection failed: %s", exc)
+        return {"status": "error", "error": str(exc), "connected": False}
+
+
+def start_heartbeat(
+    config: XtQuantConfig,
+    interval: float = 30.0,
+    max_failures: int = 3,
+) -> None:
+    """Start a daemon heartbeat thread that periodically probes the connection.
+
+    On *max_failures* consecutive failures the thread attempts an automatic
+    reconnect (``_disconnect()`` + ``_ensure_connected()``).
+
+    Safe to call multiple times (calls after the first are no-ops).
+    """
+    global _heartbeat_thread, _last_heartbeat_result, _last_heartbeat_time  # noqa: PLW0603
+
+    if _heartbeat_thread is not None and _heartbeat_thread.is_alive():
+        return  # already running
+
+    _heartbeat_stop.clear()
+    failure_count = 0
+
+    def _loop() -> None:
+        nonlocal failure_count
+        while not _heartbeat_stop.is_set():
+            try:
+                result = probe_connection(config)
+                global _last_heartbeat_result, _last_heartbeat_time  # noqa: PLW0602
+                _last_heartbeat_result = result
+                _last_heartbeat_time = _time_module.time()
+
+                if result.get("status") == "ok":
+                    failure_count = 0
+                else:
+                    failure_count += 1
+                    logger.debug("xtquant heartbeat failure %d/%d", failure_count, max_failures)
+            except Exception as exc:
+                failure_count += 1
+                logger.debug("xtquant heartbeat exception %d/%d: %s", failure_count, max_failures, exc)
+
+            if failure_count >= max_failures:
+                logger.warning("xtquant heartbeat: %d consecutive failures, attempting reconnect", max_failures)
+                try:
+                    _disconnect()
+                    _ensure_connected(config)
+                    failure_count = 0
+                except Exception as exc:
+                    logger.error("xtquant heartbeat reconnect failed: %s", exc)
+
+            _heartbeat_stop.wait(interval)
+
+    _heartbeat_thread = threading.Thread(target=_loop, daemon=True, name="xtquant-heartbeat")
+    _heartbeat_thread.start()
+    logger.info("xtquant heartbeat started (interval=%.1fs, max_failures=%d)", interval, max_failures)
+
+
+def stop_heartbeat() -> None:
+    """Stop the heartbeat thread if running."""
+    global _heartbeat_thread  # noqa: PLW0603
+    if _heartbeat_thread is not None and _heartbeat_thread.is_alive():
+        _heartbeat_stop.set()
+        _heartbeat_thread.join(timeout=5.0)
+        _heartbeat_thread = None
+        logger.info("xtquant heartbeat stopped")
+
+
+def get_heartbeat_status() -> dict[str, Any]:
+    """Return the last heartbeat result and time.
+
+    Safe to call before ``start_heartbeat()`` — returns a default "not started"
+    envelope.
+    """
+    if _last_heartbeat_time == 0.0:
+        return {"status": "not_started", "connected": False}
+    elapsed = _time_module.time() - _last_heartbeat_time
+    return {
+        **(_last_heartbeat_result or {}),
+        "last_check_ago_sec": round(elapsed, 1),
     }

@@ -95,6 +95,7 @@ def execute_live_order(
     if intent.asset_class == "cn_equity":
         from src.live.a_stock_guard import (
             build_validation_from_quote,
+            check_t_plus_1,
             validate_a_stock_order,
         )
 
@@ -117,6 +118,32 @@ def execute_live_order(
                     broker, session_id,
                     f"A-stock order guard: {'; '.join(violations)}",
                     ["mandate", "expiry", "halt_flag", "a_stock_guard"],
+                    mandate, intent=intent,
+                )
+
+        # -- T+1 settlement check --
+        if intent.side == "sell":
+            try:
+                today_trades_resp = _safe_read(connector_module, "get_today_trades", config) or {}
+                today_trades = today_trades_resp.get("trades", [])
+                if today_trades_resp.get("status") != "ok":
+                    logger.warning(
+                        "T+1 check: get_today_trades returned status=%s for %s",
+                        today_trades_resp.get("status"), broker,
+                    )
+            except Exception as exc:
+                logger.warning("T+1 check: get_today_trades raised for %s: %s", broker, exc)
+                today_trades = []
+
+            t1_violation = check_t_plus_1(
+                symbol=intent.symbol,
+                side=intent.side,
+                today_buys=today_trades,
+            )
+            if t1_violation:
+                return _deny(
+                    broker, session_id, t1_violation,
+                    ["mandate", "expiry", "halt_flag", "a_stock_guard", "t_plus_1"],
                     mandate, intent=intent,
                 )
 

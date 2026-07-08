@@ -12,14 +12,11 @@ services:
       # Override by exporting OLLAMA_BASE_URL (or setting it in a top-level .env)
       # when Ollama runs elsewhere or on a different port.
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      # ── xtquant QMT Bridge (Docker → Windows host) ──
-      - XTQUANT_BRIDGE_URL=${XTQUANT_BRIDGE_URL:-http://host.docker.internal:8888}
-      - XTQUANT_BEARER_TOKEN=${XTQUANT_BEARER_TOKEN:-qmt-ql-8f3a2d1e9c}
+      # ── xtquant native SDK ──
       - XTQUANT_MINI_QMT_PATH=${XTQUANT_MINI_QMT_PATH:-}
       - XTQUANT_ACCOUNT_ID=${XTQUANT_ACCOUNT_ID:-}
       - XTQUANT_ACCOUNT_TYPE=${XTQUANT_ACCOUNT_TYPE:-STOCK}
       - XTQUANT_PROFILE=${XTQUANT_PROFILE:-paper}
-      - XTQUANT_HTTP_TIMEOUT=${XTQUANT_HTTP_TIMEOUT:-15.0}
     extra_hosts:
       # Maps host.docker.internal -> host gateway (needed on Linux; harmless on Docker Desktop).
       # Requires Docker Engine >= 20.10 / Compose v2 (host-gateway support).

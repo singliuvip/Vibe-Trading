@@ -258,10 +258,24 @@ function BrokerRuntimeCard({
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-3">
-        <RuntimePanel title={t("runtime.authorization")} icon={broker.auth.oauth_token_present ? Wifi : WifiOff}>
-          <KeyValue label={t("runtime.oauthToken")} value={broker.auth.oauth_token_present ? t("runtime.present") : t("runtime.missing")} />
-          <KeyValue label={t("runtime.profileType")} value={broker.auth.is_live_broker ? t("runtime.recognized") : t("runtime.unknown")} />
-        </RuntimePanel>
+        {broker.sdk_status ? (
+          <RuntimePanel title="SDK Connection" icon={broker.sdk_status.status === "ok" ? Wifi : WifiOff}>
+            <KeyValue label="Status" value={broker.sdk_status.status ?? "-"} />
+            <KeyValue label="Platform" value={broker.sdk_status.platform ?? "-"} />
+            {broker.sdk_status.account ? (
+              <>
+                <KeyValue label="Account" value={broker.sdk_status.account.account_id ?? "-"} />
+                <KeyValue label="Balance" value={broker.sdk_status.account.total_value != null ? `¥${broker.sdk_status.account.total_value.toLocaleString()}` : "-"} />
+              </>
+            ) : null}
+            {broker.sdk_status.error ? <p className="text-xs text-danger">{broker.sdk_status.error}</p> : null}
+          </RuntimePanel>
+        ) : (
+          <RuntimePanel title={t("runtime.authorization")} icon={broker.auth.oauth_token_present ? Wifi : WifiOff}>
+            <KeyValue label={t("runtime.oauthToken")} value={broker.auth.oauth_token_present ? t("runtime.present") : t("runtime.missing")} />
+            <KeyValue label={t("runtime.profileType")} value={broker.auth.is_live_broker ? t("runtime.recognized") : t("runtime.unknown")} />
+          </RuntimePanel>
+        )}
 
         <RuntimePanel title={t("runtime.mandate")} icon={mandate ? ShieldCheck : ShieldOff}>
           {mandate ? (
@@ -349,6 +363,15 @@ function deriveRiskState(broker: LiveBrokerStatus, globalHalted: boolean, t: TFu
       tone: "success",
       icon: Activity,
       description: t("runtime.riskActiveDesc"),
+    };
+  }
+  // SDK connector with live connection: ready but needs mandate
+  if (broker.sdk_status?.status === "ok" && broker.runner?.alive) {
+    return {
+      label: t("runtime.riskIdle"),
+      tone: "warning",
+      icon: Clock3,
+      description: t("runtime.riskIdleDesc"),
     };
   }
   if (broker.auth.oauth_token_present && broker.mandate && !broker.mandate.expired) {

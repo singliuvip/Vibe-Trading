@@ -994,6 +994,17 @@ export interface LiveBrokerStatus {
   mandate?: LiveMandateStatus | null;
   runner: LiveRunnerLiveness;
   halted: boolean;
+  sdk_status?: {
+    status: string;
+    platform?: string;
+    account?: {
+      account_id?: string;
+      total_value?: number;
+      cash?: number;
+      market_value?: number;
+    };
+    error?: string;
+  } | null;
 }
 
 /** Response of `GET /live/status` (SPEC §7.5 runner status panel + C2). */

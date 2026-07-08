@@ -23,6 +23,7 @@ _SDK_CONNECTOR_MODULES = {
     "dhan": "src.trading.connectors.dhan.sdk",
     "shoonya": "src.trading.connectors.shoonya.sdk",
     "trading212": "src.trading.connectors.trading212.sdk",
+    "xtquant": "src.trading.connectors.xtquant.sdk",
 }
 
 
@@ -208,6 +209,7 @@ _CONNECTOR_INSTRUMENT = {
     "longbridge": ("equity", None),
     "futu": ("equity", None),
     "trading212": ("equity", None),
+    "xtquant": ("equity", None),
 }
 
 
@@ -362,11 +364,14 @@ def _audit_live_cancel(profile, order_id, symbol, result, session_id) -> None:
 
 def profile_supports_live_runner(profile: TradingProfile) -> bool:
     """Return whether a profile can run the managed live runner."""
-    return (
-        profile.environment == "live"
-        and profile.transport == "remote_mcp"
-        and RUNNER_CAPABILITY in profile.capabilities
-    )
+    if profile.environment != "live":
+        return False
+    if profile.transport == "remote_mcp" and RUNNER_CAPABILITY in profile.capabilities:
+        return True
+    # SDK connectors: runner is the SDK connection itself (e.g. miniQMT)
+    if profile.transport == "broker_sdk":
+        return True
+    return False
 
 
 def live_runner_profile_for_broker(broker: str) -> TradingProfile | None:

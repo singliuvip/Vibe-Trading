@@ -90,6 +90,36 @@ def execute_live_order(
     if halt_flag_set(broker):
         return _deny(broker, session_id, "live trading halted", ["mandate", "expiry", "halt_flag"], mandate, intent=None)
 
+    # -- A-share specific order guard (CN_EQUITY only) --
+    a_stock_checked: tuple[str, ...] = ()
+    if intent.asset_class == "cn_equity":
+        from src.live.a_stock_guard import (
+            build_validation_from_quote,
+            validate_a_stock_order,
+        )
+
+        a_stock_checked = ("a_stock_guard",)
+        quote = _safe_read(connector_module, "get_quote", config, intent.symbol)
+        if quote is not None and isinstance(quote, dict) and quote.get("status") == "ok":
+            limit_price = float(place_kwargs.get("limit_price", 0) or 0)
+            qty = int(intent.quantity or 0)
+
+            validation = build_validation_from_quote(
+                symbol=intent.symbol,
+                side=intent.side,
+                quantity=qty,
+                limit_price=limit_price,
+                quote=quote,
+            )
+            violations = validate_a_stock_order(validation)
+            if violations:
+                return _deny(
+                    broker, session_id,
+                    f"A-stock order guard: {'; '.join(violations)}",
+                    ["mandate", "expiry", "halt_flag", "a_stock_guard"],
+                    mandate, intent=intent,
+                )
+
     normalized = _normalize_notional(intent, connector_module, config)
     if normalized is None:
         return _deny(
@@ -108,7 +138,7 @@ def execute_live_order(
     )
 
     if breach is None:
-        return _allow(broker, session_id, connector_module, config, intent, place_kwargs, mandate)
+        return _allow(broker, session_id, connector_module, config, intent, place_kwargs, mandate, extra_checks=a_stock_checked)
 
     reauth = breach.kind not in (BREACH_KIND_UNIVERSE, BREACH_KIND_INSTRUMENT)
     return _deny_breach(broker, session_id, breach, mandate, intent, reauth)
@@ -119,7 +149,8 @@ def execute_live_order(
 # --------------------------------------------------------------------------- #
 
 
-def _allow(broker, session_id, connector_module, config, intent, place_kwargs, mandate) -> dict[str, Any]:
+def _allow(broker, session_id, connector_module, config, intent, place_kwargs, mandate,
+           extra_checks: tuple[str, ...] = ()) -> dict[str, Any]:
     """Execute the order; consume a count + audit only on a non-error result."""
     try:
         result = connector_module.place_order(config, **place_kwargs)
@@ -132,7 +163,7 @@ def _allow(broker, session_id, connector_module, config, intent, place_kwargs, m
         "mandate", "expiry", "halt_flag", "exclude_symbols", "allowed_instruments",
         "asset_classes", "max_order_notional_usd", "max_total_exposure_usd",
         "max_leverage", "max_trades_per_day", "account_funding_usd", "universe_floors",
-    ]
+    ] + list(extra_checks)
     if is_error:
         record = _audit(
             broker, session_id, kind="order_rejected", outcome="error", mandate=mandate, intent=intent,
@@ -276,13 +307,16 @@ def _connector_quote_price(connector_module: Any, config: Any, symbol: str) -> f
     return None
 
 
-def _safe_read(connector_module: Any, fn_name: str, config: Any) -> object:
+def _safe_read(connector_module: Any, fn_name: str, config: Any, *args: Any) -> object:
     """Call a connector read fn, returning ``None`` on any error (fail-closed)."""
     fn = getattr(connector_module, fn_name, None)
     if fn is None:
         return None
     try:
-        result = fn(config)
+        if args:
+            result = fn(*args, config=config)
+        else:
+            result = fn(config)
     except Exception as exc:  # noqa: BLE001
         logger.warning("connector read %s failed: %s", fn_name, exc)
         return None

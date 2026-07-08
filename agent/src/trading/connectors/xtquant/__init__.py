@@ -13,6 +13,12 @@ the miniQMT path. Paper accounts use a dedicated paper miniQMT instance; live
 accounts connect to a live miniQMT. The connector resolves the account ID whose
 ``account_type`` matches the selected profile and auto-discovers account IDs by
 scanning the ``userdata_mini`` directory.
+
+Transport selection:
+
+- ``broker_sdk`` — direct xtquant import (Windows native, ``sdk.py``)
+- ``broker_http`` — HTTP bridge via QMT Bridge :8888 (Docker/Linux,
+  ``sdk_http.py``)
 """
 
 from src.trading.connectors.xtquant.sdk import (  # noqa: F401

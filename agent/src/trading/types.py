@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 Environment = Literal["paper", "live"]
-Transport = Literal["local_tws", "remote_mcp", "broker_sdk"]
+Transport = Literal["local_tws", "remote_mcp", "broker_sdk", "broker_http"]
 
 READ_CAPABILITIES = (
     "account.read",

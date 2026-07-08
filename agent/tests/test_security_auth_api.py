@@ -457,10 +457,9 @@ def test_default_cors_origins_are_loopback_only() -> None:
 
     assert origins
     assert "*" not in origins
-    assert all(
-        origin.startswith("http://localhost:") or origin.startswith("http://127.0.0.1:")
-        for origin in origins
-    )
+    # Loopback HTTP origins plus tauri://localhost for the desktop client.
+    allowed_prefixes = ("http://localhost:", "http://127.0.0.1:", "tauri://")
+    assert all(origin.startswith(allowed_prefixes) for origin in origins)
 
 
 def test_cors_origins_reject_credentialed_wildcard() -> None:

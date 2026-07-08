@@ -105,7 +105,9 @@ class TestCheckStatus:
 
     def test_no_mini_qmt_path(self):
         result = check_status(XtQuantConfig(mini_qmt_path=""))
-        assert result["status"] == "error"
+        # Paper profile doesn't require miniQMT path.
+        assert result["status"] == "ok"
+        assert result.get("note", "").startswith("paper")
 
 
 class TestPlaceOrderPaper:
@@ -126,8 +128,11 @@ class TestPlaceOrderPaper:
 
     def test_paper_cancel_returns_success(self):
         config = XtQuantConfig(profile="paper")
-        # Place an order first so it exists in the paper engine
-        place_result = place_order(config, "000001.SZ", "buy", quantity=100)
+        # Place a limit order (won't fill) so it stays pending and can be cancelled.
+        place_result = place_order(
+            config, "000001.SZ", "buy", quantity=100,
+            order_type="limit", limit_price=0.01,
+        )
         order_id = place_result["order_id"]
         result = cancel_order(config, order_id)
         assert result["status"] == "ok"

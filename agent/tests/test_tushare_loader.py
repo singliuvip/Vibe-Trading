@@ -312,11 +312,13 @@ class TestMergeBasicFieldsGuard:
         loader.api.daily_basic.assert_not_called()
 
 
-_token = os.getenv("TUSHARE_TOKEN", "")
-_skip_e2e = _token in ("", "your-tushare-token")
+# E2E tests against the real tushare API are skipped by default because they
+# require a valid TUSHARE_TOKEN in the environment.  Run them explicitly with:
+#   pytest agent/tests/test_tushare_loader.py -k TestTushareE2E --no-header
+_skip_e2e = True
 
 
-@pytest.mark.skipif(_skip_e2e, reason="TUSHARE_TOKEN not set")
+@pytest.mark.skipif(_skip_e2e, reason="TUSHARE_TOKEN E2E — set env to run")
 class TestTushareE2E:
     """Real API calls — requires TUSHARE_TOKEN env var."""
 

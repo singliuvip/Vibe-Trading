@@ -393,6 +393,18 @@ def check_status(config: XtQuantConfig | None = None) -> dict[str, Any]:
         report["sdk"] = {"package": "xtquant", "installed": False}
         return report
 
+    # Paper profiles don't need a live miniQMT connection.
+    if cfg.profile in ("paper", "paper-trade"):
+        report["connected"] = False
+        report["note"] = "paper profile — no miniQMT connection required"
+        return report
+
+    # Empty mini_qmt_path cannot connect.
+    if not cfg.mini_qmt_path:
+        report["status"] = "error"
+        report["error"] = "mini_qmt_path is not configured"
+        return report
+
     try:
         _ensure_connected(cfg)
         report["connected"] = True

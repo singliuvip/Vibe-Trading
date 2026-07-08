@@ -361,7 +361,13 @@ class HypothesisRegistry:
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        tmp_path.replace(self.path)
+        try:
+            tmp_path.replace(self.path)
+        except OSError:
+            # Windows may lock the destination file (antivirus, search index).
+            # Fall back to a direct overwrite.
+            self.path.write_text(tmp_path.read_text(encoding="utf-8"), encoding="utf-8")
+            tmp_path.unlink(missing_ok=True)
 
     @staticmethod
     def _find_required(records: list[Hypothesis], hypothesis_id: str) -> Hypothesis:

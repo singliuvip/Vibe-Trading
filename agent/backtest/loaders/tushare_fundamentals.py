@@ -8,7 +8,7 @@ from typing import Any, Iterable
 
 import pandas as pd
 
-TUSHARE_TOKEN_PLACEHOLDERS = {"", "your-tushare-token"}
+TUSHARE_TOKEN_PLACEHOLDERS = {"", "your-tushare-token", "tushare-token"}
 
 
 class DataProviderError(Exception):

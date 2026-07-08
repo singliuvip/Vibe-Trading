@@ -1570,8 +1570,7 @@ def _known_live_brokers() -> List[str]:
         if profile.environment == "live":
             keys.add(profile.connector)
 
-    # DEBUG: filter to only show xtquant for testing
-    return ["xtquant"] if "xtquant" in keys else sorted(keys)
+    return sorted(keys)
 
 
 def _oauth_token_present(broker: str) -> bool:

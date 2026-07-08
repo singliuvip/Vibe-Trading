@@ -177,7 +177,7 @@ def test_gate_quantity_order_priced_and_enforced(monkeypatch) -> None:
 def test_service_place_order_paper_is_direct(monkeypatch) -> None:
     """Paper profile places directly (sandbox), bypassing the live gate."""
     conn = _FakeConnector()
-    monkeypatch.setattr(service, "_sdk_module", lambda c: conn)
+    monkeypatch.setattr(service, "_sdk_module", lambda connector, transport=None: conn)
     monkeypatch.setattr(conn, "build_config", lambda *a, **k: object(), raising=False)
     # build_config is called on the module; give the fake one.
     conn.build_config = lambda profile_config, overrides: object()
@@ -191,7 +191,7 @@ def test_service_place_order_live_routes_through_gate(monkeypatch) -> None:
     """Live profile routes through the gate; no mandate → blocked, not placed."""
     conn = _FakeConnector()
     conn.build_config = lambda profile_config, overrides: object()
-    monkeypatch.setattr(service, "_sdk_module", lambda c: conn)
+    monkeypatch.setattr(service, "_sdk_module", lambda connector, transport=None: conn)
     monkeypatch.setattr("src.live.sdk_order_gate.load_mandate", lambda broker: None)
     monkeypatch.setattr("src.live.sdk_order_gate.write_live_action", lambda *a, **k: {"audited": True})
     out = service.place_order("AAPL", "alpaca-live-trade", side="buy", notional=500.0)

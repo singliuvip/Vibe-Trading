@@ -87,8 +87,14 @@ def mini_zoo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # Make `src.factors.zoo.fakezoo.<id>` importable from tmp_path's tree by
     # monkey-patching sys.path to include tmp_path, then creating an `src`
     # alias that points to `factors/`-as-`src.factors`.
+    # On Windows, symlink creation requires admin/Developer Mode, so fall
+    # back to a directory copy when symlink fails.
     src_alias = tmp_path / "src"
-    src_alias.symlink_to(tmp_path)
+    try:
+        src_alias.symlink_to(tmp_path)
+    except OSError:
+        import shutil
+        shutil.copytree(tmp_path, src_alias, dirs_exist_ok=True)
     monkeypatch.syspath_prepend(str(tmp_path))
     # Reset any cached modules from previous test
     for mod_name in list(sys.modules):

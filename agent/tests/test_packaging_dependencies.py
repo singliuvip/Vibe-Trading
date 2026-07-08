@@ -18,7 +18,7 @@ def _normalized_requirement_name(requirement: str) -> str:
 
 def test_harmonic_backend_is_not_a_core_install_dependency() -> None:
     """Keep optional harmonic plotting deps from breaking baseline installs."""
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     core_dependencies = {
         _normalized_requirement_name(requirement)
@@ -26,7 +26,7 @@ def test_harmonic_backend_is_not_a_core_install_dependency() -> None:
     }
     requirements_txt = {
         _normalized_requirement_name(line)
-        for line in (ROOT / "agent" / "requirements.txt").read_text().splitlines()
+        for line in (ROOT / "agent" / "requirements.txt").read_text(encoding="utf-8").splitlines()
         if line and not line.startswith("#")
     }
 
@@ -36,7 +36,7 @@ def test_harmonic_backend_is_not_a_core_install_dependency() -> None:
 
 def test_harmonic_backend_is_available_as_an_optional_extra() -> None:
     """Users who need harmonic pattern detection can still opt in explicitly."""
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     harmonic_extra = {
         _normalized_requirement_name(requirement)
@@ -48,7 +48,7 @@ def test_harmonic_backend_is_available_as_an_optional_extra() -> None:
 
 def test_channel_core_websocket_dependency_is_declared_for_baseline_installs() -> None:
     """The built-in WebSocket gateway imports websockets at module import time."""
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     core_dependencies = {
         _normalized_requirement_name(requirement)
@@ -56,7 +56,7 @@ def test_channel_core_websocket_dependency_is_declared_for_baseline_installs() -
     }
     requirements_txt = {
         _normalized_requirement_name(line)
-        for line in (ROOT / "agent" / "requirements.txt").read_text().splitlines()
+        for line in (ROOT / "agent" / "requirements.txt").read_text(encoding="utf-8").splitlines()
         if line and not line.startswith("#")
     }
 
@@ -66,7 +66,7 @@ def test_channel_core_websocket_dependency_is_declared_for_baseline_installs() -
 
 def test_channel_optional_extras_cover_all_sdk_backed_adapters() -> None:
     """Keep install hints and packaging extras in sync for IM adapters."""
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     extras = pyproject["project"]["optional-dependencies"]
 
     expected_extras = {

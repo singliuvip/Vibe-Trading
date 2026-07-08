@@ -14,7 +14,7 @@ from backtest.loaders.base import cached_loader_fetch, validate_date_range
 from backtest.loaders.registry import register
 
 
-TUSHARE_TOKEN_PLACEHOLDERS = {"", "your-tushare-token"}
+TUSHARE_TOKEN_PLACEHOLDERS = {"", "your-tushare-token", "tushare-token"}
 
 
 def _is_index(code: str) -> bool:

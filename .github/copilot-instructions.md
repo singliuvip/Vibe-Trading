@@ -54,8 +54,8 @@ Vibe-Trading 是一个自然语言驱动的金融研究 AI Agent 平台（`pip i
 ┌──────────┐ ┌──────────┐ ┌──────────────┐
 │ Main     │ │ Develop  │ │ Review       │
 │ Agent    │ │ Agent    │ │ Agent        │
-│ Claude   │ │ DeepSeek │ │ DeepSeek     │
-│ Ops 4.6  │ │ V4 Pro   │ │ V4 Pro       │
+│ GPT-5.5  │ │ DeepSeek │ │ DeepSeek     │
+│          │ │ V4 Pro   │ │ V4 Pro       │
 │ 仅架构    │ │ 代码实现  │ │ 审查+构建+测试 │
 └──────────┘ └──────────┘ └──────────────┘
 ```
@@ -65,20 +65,18 @@ Vibe-Trading 是一个自然语言驱动的金融研究 AI Agent 平台（`pip i
 | 模型 | 角色 | 调用方式 | 频率 |
 |---|---|---|---|
 | **DeepSeek V4 Flash** | Dispatcher | 用户直接对话 | 每轮必用 |
-| **Claude Opus 4.6**（首选） | Main Agent | Dispatcher 通过 `runSubagent` 调用 | **仅必要时** |
-| **GPT-5.5**（fallback） | Main Agent | Ops 不可用时自动回退 | 降级时使用 |
+| **GPT-5.5**（首选） | Main Agent | Dispatcher 通过 `runSubagent` 调用 | **仅必要时** |
 | **DeepSeek V4 Pro** | Develop Agent | Dispatcher 通过 `runSubagent` 调用 | 实现轮次 |
 | **DeepSeek V4 Pro** | Review Agent | Dispatcher 通过 `runSubagent` 调用 | 审查轮次 |
 
-> Claude Opus 4.6 仅在以下场景调用：新需求首次分析、Bug 定位与根因分析、性能瓶颈分析与优化、跨模块修改、架构冲突、用户驳回方案调整。
-> 若 Claude Opus 4.6 不可用（超时/不可达），Dispatcher 自动回退使用 GPT-5.5。
+> GPT-5.5 仅在以下场景调用：新需求首次分析、Bug 定位与根因分析、性能瓶颈分析与优化、跨模块修改、架构冲突、用户驳回方案调整。
 
 ### Agent 定义文件
 
 | Agent | 文件 | 模型 | 职责 | 用户可见 |
 |---|---|---|---|---|
 | **Dispatcher** | `.github/agents/dispatcher.agent.md` | DeepSeek V4 Flash | 调度入口、任务路由、报告汇总、用户交互 | ✅ 唯一直连 |
-| Main Agent | `.github/agents/main.agent.md` | **Claude Opus 4.6** | 架构设计、边界识别、任务拆解、冲突裁决、问题定位、性能优化 | ❌ 子 agent |
+| Main Agent | `.github/agents/main.agent.md` | **GPT-5.5** | 架构设计、边界识别、任务拆解、冲突裁决、问题定位、性能优化 | ❌ 子 agent |
 | Develop Agent | `.github/agents/develop.agent.md` | DeepSeek V4 Pro | 聚焦代码实现、局部验证、修复问题 | ❌ 子 agent |
 | Review Agent | `.github/agents/review.agent.md` | DeepSeek V4 Pro | 代码审查、构建验证、规范检查、测试 | ❌ 子 agent |
 
@@ -86,7 +84,7 @@ Vibe-Trading 是一个自然语言驱动的金融研究 AI Agent 平台（`pip i
 
 1. 用户在 **Dispatcher**（唯一入口）中输入需求。
 2. **Dispatcher** 判断是否需要架构分析：
-   - 需要 → 通过 `runSubagent` 调用 **Main Agent（Claude Opus 4.6）**，获取架构方案后提交用户审批。
+   - 需要 → 通过 `runSubagent` 调用 **Main Agent（GPT-5.5）**，获取架构方案后提交用户审批。
    - 不需要 → 直接进入实现。
 3. **Dispatcher** 通过 `runSubagent` 调用 **Develop Agent** 实现。
 4. **Develop Agent** 完成实现并运行局部验证后，返回实现报告。

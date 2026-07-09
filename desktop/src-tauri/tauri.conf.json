@@ -6,7 +6,7 @@
     "frontendDist": "../../frontend/dist",
     "devUrl": "http://localhost:8899",
     "beforeDevCommand": "",
-    "beforeBuildCommand": "npm run build --prefix c:/Project/Vibe-Trading/frontend"
+    "beforeBuildCommand": "npm run build --prefix ../frontend"
   },
   "app": {
     "windows": [

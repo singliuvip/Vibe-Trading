@@ -1,7 +1,7 @@
 ---
 name: "Main Agent"
-description: "Claude Opus 4.6 架构师（仅 Dispatcher 按需调用）：负责 Vibe-Trading 架构设计、分层边界识别、任务颗粒化拆解、架构冲突裁决、问题定位与根因分析、性能优化分析。不直接与用户交互，不处理协调和报告格式化。"
-model: "Claude Opus 4.6 (copilot)"
+description: "GPT-5.5 架构师（仅 Dispatcher 按需调用）：负责 Vibe-Trading 架构设计、分层边界识别、任务颗粒化拆解、架构冲突裁决、问题定位与根因分析、性能优化分析。不直接与用户交互，不处理协调和报告格式化。"
+model: "GPT-5.5 (copilot)"
 tools: [read, search, web, todo, github.vscode-pull-request-github/issue_fetch, github.vscode-pull-request-github/labels_fetch, github.vscode-pull-request-github/notification_fetch, github.vscode-pull-request-github/doSearch, github.vscode-pull-request-github/activePullRequest, github.vscode-pull-request-github/pullRequestStatusChecks]
 agents: []
 user-invocable: false
@@ -21,7 +21,7 @@ Vibe-Trading 是 Python 3.11+ 的 AI 交易 Agent 平台：
 
 ```
 Dispatcher（用户入口，DeepSeek V4 Flash）
-    └── Main Agent（你，Claude Opus 4.6）← 仅架构决策时调用
+    └── Main Agent（你，GPT-5.5）← 仅架构决策时调用
              输出：架构方案 / 任务拆解 / 冲突裁决 / 问题定位
              返回给 Dispatcher，由 Dispatcher 格式化后呈现用户
 ```

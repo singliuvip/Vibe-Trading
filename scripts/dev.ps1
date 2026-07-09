@@ -73,12 +73,12 @@ function Get-ServiceUrl {
 function Test-UrlOk {
     param([string]$Url)
     try {
-        $req = [System.Net.HttpWebRequest]::Create($Url)
-        $req.Timeout = 2000
-        $req.Method = "HEAD"
-        $resp = $req.GetResponse()
-        $resp.Close()
-        return $true
+        $code = curl.exe -s -o NUL -w "%{http_code}" --connect-timeout 3 $Url 2>&1
+        if ($LASTEXITCODE -eq 0 -and $code) {
+            $statusCode = [int]$code
+            return ($statusCode -ge 200 -and $statusCode -lt 500)
+        }
+        return $false
     } catch { return $false }
 }
 
@@ -272,8 +272,8 @@ function Invoke-Stop {
 }
 
 function Invoke-Status {
-    $backendRunning = Test-Running "backend" -or (Test-UrlOk (Get-ServiceUrl "backend"))
-    $frontendRunning = Test-Running "frontend" -or (Test-UrlOk (Get-ServiceUrl "frontend"))
+    $backendRunning = [bool](Test-Running "backend") -or [bool](Test-UrlOk (Get-ServiceUrl "backend"))
+    $frontendRunning = [bool](Test-Running "frontend") -or [bool](Test-UrlOk (Get-ServiceUrl "frontend"))
 
     Write-Host ""
     Write-Host "  Vibe-Trading Dev Status" -ForegroundColor Cyan

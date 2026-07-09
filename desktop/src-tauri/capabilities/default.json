@@ -11,6 +11,11 @@
           "name": "vibe-trading",
           "cmd": "vibe-trading",
           "args": true
+        },
+        {
+          "name": "binaries/vibe-backend",
+          "sidecar": true,
+          "args": true
         }
       ]
     },
@@ -20,6 +25,11 @@
         {
           "name": "vibe-trading",
           "cmd": "vibe-trading",
+          "args": true
+        },
+        {
+          "name": "binaries/vibe-backend",
+          "sidecar": true,
           "args": true
         }
       ]

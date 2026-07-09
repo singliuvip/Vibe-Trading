@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
-from rich.console import Console
+from rich.console import Console as _RichConsole
 
 from cli._version import __version__ as APP_VERSION
 from src.ui_services import build_run_analysis, load_run_context
@@ -48,7 +48,17 @@ ENV_EXAMPLE_PATH = AGENT_DIR / ".env.example"
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 _UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MB
 
-console = Console()
+# Lazy Console — Rich's Console.__init__ can hang in PyInstaller frozen
+# environments on Windows because it probes Win32 console APIs (GetStdHandle,
+# GetConsoleScreenBufferInfo).  We defer creation until the first actual use.
+_console: _RichConsole | None = None
+
+def _get_console() -> _RichConsole:
+    global _console
+    if _console is None:
+        _console = _RichConsole()
+    return _console
+
 logger = logging.getLogger(__name__)
 
 
@@ -586,7 +596,7 @@ async def _run_startup_preflight() -> None:
     """Run preflight checks on server startup."""
     from src.preflight import run_preflight
 
-    run_preflight(console)
+    run_preflight(_get_console())
     _start_scheduled_research_executor()
     if os.getenv("VIBE_TRADING_CHANNELS_AUTO_START", "").strip().lower() in {"1", "true", "yes"}:
         await _start_channel_runtime()
@@ -1035,6 +1045,12 @@ def _validate_path_param(value: str, kind: str) -> None:
 # ============================================================================
 
 from src.api.runs_routes import register_runs_routes  # noqa: E402
+# PyInstaller runs this as __main__; ensure api_server is in sys.modules
+# so that register_runs_routes (and any other downstream code that does
+# sys.modules["api_server"] lookups) can find the host module.
+import sys as _sys_modules
+_sys_modules.modules.setdefault("api_server", _sys_modules.modules[__name__])
+
 register_runs_routes(app)
 
 # Re-export for test access via api_server.*

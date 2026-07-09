@@ -19,12 +19,18 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:8899 http://localhost:8899"
     }
   },
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "externalBin": [
+      "binaries/vibe-backend"
+    ],
+    "resources": [
+      "binaries/_internal/**/*"
+    ],
     "icon": [
       "icons/icon.svg",
       "icons/icon.png",

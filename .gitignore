@@ -91,3 +91,13 @@ AGENTS.md
 # Alpha Zoo wiki artifacts (generated, not source)
 wiki/alpha-library/manifest.json
 wiki/alpha-library/content/
+*.exe
+
+# Build venv
+desktop/build-env/
+
+# PyInstaller build artifacts
+desktop/build/pyi-work*
+desktop/build/*.spec
+desktop/src-tauri/binaries/
+agent/vibe-backend-x86_64-pc-windows-msvc.spec

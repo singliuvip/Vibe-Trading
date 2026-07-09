@@ -1,10 +1,9 @@
-use std::process::{Command, Stdio, Child};
 use std::sync::Mutex;
-use std::io::{BufRead, BufReader};
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_shell::ShellExt;
 
-static BACKEND_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
+static BACKEND_PROCESS: Mutex<Option<tauri_plugin_shell::process::CommandChild>> = Mutex::new(None);
 
 #[tauri::command]
 fn get_backend_url() -> String {
@@ -25,58 +24,18 @@ async fn wait_backend_ready() -> Result<(), String> {
                 return Ok(());
             }
             Ok(Ok(res)) => {
-                // Server responded but with non-success status - might still be starting
                 println!("[Vibe-Trading] Backend responded with status {} (attempt {})", res.status(), attempt);
             }
             Ok(Err(e)) => {
                 println!("[Vibe-Trading] Backend connection error (attempt {}): {}", attempt, e);
             }
-            _ => {
-                // timeout - server not ready yet
-            }
+            _ => {}
         }
         if attempt < 30 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     }
-    Err("Backend failed to start after 30 seconds.\n\nMake sure 'vibe-trading' is installed:\n  pip install vibe-trading-ai".to_string())
-}
-
-fn try_spawn_backend() -> Result<Child, String> {
-    // Try vibe-trading CLI first
-    match Command::new("vibe-trading")
-        .args(&["serve", "--port", "8899", "--host", "127.0.0.1"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => return Ok(child),
-        Err(_) => {
-            // vibe-trading not found - try python -m vibe_trading
-            for python in &["python", "python3", "py"] {
-                if let Ok(child) = Command::new(python)
-                    .args(&["-m", "vibe_trading", "serve", "--port", "8899", "--host", "127.0.0.1"])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                {
-                    return Ok(child);
-                }
-            }
-        }
-    }
-    Err("Cannot start backend.\n\nMake sure 'vibe-trading-ai' is installed:\n  pip install vibe-trading-ai".to_string())
-}
-
-fn spawn_stderr_reader(stderr: std::process::ChildStderr) {
-    std::thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                eprintln!("[backend] {}", line);
-            }
-        }
-    });
+    Err("Backend failed to start after 30 seconds.".to_string())
 }
 
 pub fn run() {
@@ -86,55 +45,52 @@ pub fn run() {
         .setup(|app| {
             let app_handle = app.handle().clone();
 
-            // Spawn backend process
-            let mut backend_child = try_spawn_backend()
+            // Spawn backend sidecar (bundled with the app)
+            // NOTE: sidecar name must match the stem in bundle.externalBin.
+            // Bundler copies binaries/vibe-backend-{triple}.exe → <exe_dir>/vibe-backend.exe
+            let sidecar_command = app.shell().sidecar("vibe-backend")
                 .map_err(|e| {
-                    eprintln!("[Vibe-Trading] {}", e);
-                    e
+                    let msg = format!("Failed to create backend sidecar command: {}", e);
+                    eprintln!("[Vibe-Trading] {}", msg);
+                    msg
                 })?;
 
-            // Read stderr in background to capture errors
-            if let Some(stderr) = backend_child.stderr.take() {
-                spawn_stderr_reader(stderr);
-            }
-            // Discard stdout
-            drop(backend_child.stdout.take());
+            let (mut rx, child) = sidecar_command
+                .args(["--port", "8899", "--host", "127.0.0.1"])
+                .spawn()
+                .map_err(|e| {
+                    let msg = format!("Failed to start backend sidecar: {}", e);
+                    eprintln!("[Vibe-Trading] {}", msg);
+                    msg
+                })?;
 
-            *BACKEND_PROCESS.lock().unwrap() = Some(backend_child);
+            *BACKEND_PROCESS.lock().unwrap() = Some(child);
+
+            // Read stderr in background to capture errors
+            tauri::async_runtime::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
+                            let text = String::from_utf8_lossy(&line);
+                            eprintln!("[backend] {}", text.trim());
+                        }
+                        tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
+                            let text = String::from_utf8_lossy(&line);
+                            println!("[backend] {}", text.trim());
+                        }
+                        tauri_plugin_shell::process::CommandEvent::Terminated(payload) => {
+                            eprintln!("[Vibe-Trading] Backend exited with code {:?}", payload.code);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            });
 
             // Wait for backend to be ready
             tauri::async_runtime::spawn(async move {
                 // Give backend a moment to fail fast
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-                // Check if backend process already died
-                {
-                    let mut guard = BACKEND_PROCESS.lock().unwrap();
-                    if let Some(ref mut child) = *guard {
-                        match child.try_wait() {
-                            Ok(Some(status)) => {
-                                let msg = format!(
-                                    "Backend process exited immediately with code: {:?}\n\n\
-                                     Try running manually:\n  vibe-trading serve --port 8899",
-                                    status.code()
-                                );
-                                if let Some(window) = app_handle.get_webview_window("main") {
-                                    tauri_plugin_dialog::MessageDialogBuilder::new(
-                                        window.dialog().clone(),
-                                        "Backend Crashed",
-                                        &msg,
-                                    )
-                                    .kind(tauri_plugin_dialog::MessageDialogKind::Error)
-                                    .show(|_| {});
-                                }
-                                app_handle.exit(1);
-                                return;
-                            }
-                            Ok(None) => {} // still running
-                            Err(_) => {}   // can't check
-                        }
-                    }
-                }
+                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
                 match wait_backend_ready().await {
                     Ok(()) => {}
@@ -159,9 +115,9 @@ pub fn run() {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
 
-                        // Kill backend process
+                        // Kill backend sidecar
                         if let Ok(mut proc_guard) = BACKEND_PROCESS.lock() {
-                            if let Some(mut child) = proc_guard.take() {
+                            if let Some(child) = proc_guard.take() {
                                 let _ = child.kill();
                             }
                         }

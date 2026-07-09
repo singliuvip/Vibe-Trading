@@ -15,7 +15,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
@@ -25,7 +25,6 @@ from src.channels.bus.events import OutboundMessage
 from src.channels.bus.queue import MessageBus
 from src.channels.base import BaseChannel
 from src.channels.utils import get_media_dir
-from pydantic import BaseModel
 from src.channels.utils import safe_filename
 # logging_bridge not needed (using stdlib logging)
 
@@ -338,8 +337,19 @@ def _extract_post_text(content_json: dict) -> str:
     return text
 
 
+def _feishu_alias(field_name: str) -> str:
+    """Generate camelCase alias for FeishuConfig fields."""
+    parts = field_name.split("_")
+    return parts[0] + "".join(p.capitalize() for p in parts[1:])
+
+
 class FeishuConfig(BaseModel):
     """Feishu/Lark channel configuration using WebSocket long connection."""
+
+    model_config = ConfigDict(
+        alias_generator=_feishu_alias,
+        populate_by_name=True,
+    )
 
     enabled: bool = False
     app_id: str = ""
@@ -644,14 +654,45 @@ class FeishuChannel(BaseChannel):
         self.config.app_secret = result["app_secret"]
         self.config.domain = result.get("domain", "feishu")
 
-        # Write credentials back to config
-        # VT-TODO: persist feishu credentials via VT config system
+        # Persist credentials to ~/.vibe-trading/agent.json
         try:
-            from src.config.loader import load_agent_config
-            # Credentials stored in-memory on self.config; persist via VT config
-            # when channel config persistence is wired up.
-        except Exception:
-            pass
+            from src.config.paths import get_config_path
+
+            config_path = get_config_path()
+            existing: dict = {}
+            if config_path.exists():
+                try:
+                    existing = json.loads(config_path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            channels = existing.get("channels", {})
+            if not isinstance(channels, dict):
+                channels = {}
+            feishu_cfg = channels.get("feishu", {})
+            if not isinstance(feishu_cfg, dict):
+                feishu_cfg = {}
+            feishu_cfg.update({
+                "appId": self.config.app_id,
+                "appSecret": self.config.app_secret,
+                "domain": self.config.domain,
+                "enabled": True,
+            })
+            channels["feishu"] = feishu_cfg
+            existing["channels"] = channels
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                json.dumps(existing, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            _LOGIN_CONSOLE.print(
+                f"[dim]Credentials saved to {config_path}[/dim]"
+            )
+        except Exception as exc:
+            _LOGIN_CONSOLE.print(
+                f"[yellow]Warning: Could not persist credentials: {exc}[/yellow]"
+            )
 
         _LOGIN_CONSOLE.print("\n[green]Feishu/Lark login complete.[/green]")
         _LOGIN_CONSOLE.print(f"App ID: {escape(result['app_id'])}")

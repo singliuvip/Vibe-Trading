@@ -3,7 +3,6 @@
 
 V5: ReAct Agent + async /run + CORS env + SSE tool events.
 """
-
 from __future__ import annotations
 
 import asyncio

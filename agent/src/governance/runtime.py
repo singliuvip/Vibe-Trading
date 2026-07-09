@@ -38,6 +38,11 @@ class GovernedToolRegistry:
     def tool_names(self) -> list[str]:
         return list(getattr(self.inner, "tool_names", []))
 
+    @property
+    def tools(self) -> dict[str, Any]:
+        """Delegate to inner registry's tools."""
+        return getattr(self.inner, "tools", {})
+
     def get(self, name: str) -> Any:
         return self.inner.get(name)
 

@@ -26,6 +26,13 @@ class _SecretRegistry:
 
     _tools: dict[str, Any] = {}
 
+    def __len__(self) -> int:
+        return 0
+
+    @property
+    def tools(self) -> dict[str, Any]:
+        return self._tools
+
     def get(self, tool_name: str) -> _Tool:
         return _Tool()
 

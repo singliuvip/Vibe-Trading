@@ -360,15 +360,10 @@ class XiaoyiA2AChannel(BaseChannel):
         self._ws = await websockets.connect(
             url,
             additional_headers=extra_headers,
-            ping_interval=None,  # 我们自己管理心跳
+            ping_interval=None,
             close_timeout=5,
             open_timeout=self.config.connection_timeout,
         )
-
-        # 发送初始化消息，告知平台 agent 已就绪（对齐 npm sendInitMessage）
-        init_frame = {"msgType": "clawd_bot_init", "agentId": self.config.agent_id}
-        await self._ws_send_json(init_frame)
-        self.logger.info("Sent clawd_bot_init to %s", url)
 
     async def _run_loops(self) -> None:
         """启动心跳和接收循环，等待任一结束。"""

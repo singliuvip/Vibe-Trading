@@ -92,9 +92,9 @@ const CATEGORIES: Category[] = [
         promptKey: "welcome.examples.investmentCommitteePrompt",
       },
       {
-        titleKey: "welcome.examples.tradingAgentsTeam",
-        descKey: "welcome.examples.tradingAgentsTeamDesc",
-        promptKey: "welcome.examples.tradingAgentsTeamPrompt",
+        titleKey: "welcome.examples.analystResearchTeam",
+        descKey: "welcome.examples.analystResearchTeamDesc",
+        promptKey: "welcome.examples.analystResearchTeamPrompt",
       },
       {
         titleKey: "welcome.examples.quantStrategyDesk",

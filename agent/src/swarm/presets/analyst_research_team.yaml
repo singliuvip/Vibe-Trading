@@ -1,5 +1,5 @@
-name: trading_agents_workflow
-title: "TradingAgents Workflow (11-Agent Research → Debate → Risk → Decision)"
+name: analyst_research_team
+title: "Analyst Research Team (11-Agent Research → Debate → Risk → Decision)"
 description: >
   Faithful port of the TradingAgents multi-agent architecture:
   4 analysts (market/sentiment/news/fundamentals) →

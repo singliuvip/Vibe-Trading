@@ -407,11 +407,11 @@ t=35: Fundamentals done
 
 ```
 agent/src/swarm/presets/
-├── trading_agents_workflow.yaml        ← 新 Preset (17 agents, 17 tasks, 8 layers)
+├── analyst_research_team.yaml        ← 新 Preset (17 agents, 17 tasks, 8 layers)
 └── ...
 
 agent/src/swarm/
-├── schemas_trading_agents.py           ← 结构化输出 Schema 参考
+├── schemas_analyst_research_team.py           ← 结构化输出 Schema 参考
 └── ...
 ```
 
@@ -480,15 +480,15 @@ agent/src/swarm/
 
 ```bash
 # 基础运行
-vibe-trading --swarm-run trading_agents_workflow \
+vibe-trading --swarm-run analyst_research_team \
   '{"target":"AAPL","market":"US"}'
 
 # 复杂分析
-vibe-trading --swarm-run trading_agents_workflow \
+vibe-trading --swarm-run analyst_research_team \
   '{"target":"BTC-USDT","market":"crypto"}'
 
 # 中概股
-vibe-trading --swarm-run trading_agents_workflow \
+vibe-trading --swarm-run analyst_research_team \
   '{"target":"600519.SH","market":"A-share"}'
 
 # 查看运行状态
@@ -586,8 +586,8 @@ tasks:
 
 | 资源 | 路径 |
 |---|---|
-| **TradingAgents Preset** | `agent/src/swarm/presets/trading_agents_workflow.yaml` |
-| **结构化 Schema** | `agent/src/swarm/schemas_trading_agents.py` |
+| **TradingAgents Preset** | `agent/src/swarm/presets/analyst_research_team.yaml` |
+| **结构化 Schema** | `agent/src/swarm/schemas_analyst_research_team.py` |
 | **Vibe-Trading 投资委员会** | `doc/investment-committee-workflow.md` |
 | **Swarm 扩展指南** | `doc/extend-swarm-workflow.md` |
 | **TradingAgents 架构** | `/workspaces/fw_mc_dev/trade/TradingAgents/` |

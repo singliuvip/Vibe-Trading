@@ -186,7 +186,7 @@ class ContextBuilder:
             )
 
         return _SYSTEM_PROMPT.format(
-            tool_count=len(self.registry._tools),
+            tool_count=len(self.registry),
             skill_count=len(self.skills_loader.skills),
             data_source_count=self._count_data_sources(),
             tool_descriptions=self._format_tool_descriptions(),
@@ -253,7 +253,7 @@ class ContextBuilder:
     def _format_tool_descriptions(self) -> str:
         """Format tool descriptions."""
         lines = []
-        for tool in self.registry._tools.values():
+        for tool in self.registry.tools.values():
             params = tool.parameters.get("properties", {})
             required = tool.parameters.get("required", [])
             param_parts = []

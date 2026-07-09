@@ -3,11 +3,11 @@ TradingAgents 结构化输出 Schemas — 移植到 Vibe-Trading 的 Pydantic �
 
 这些 Schema 定义了 TradingAgents 工作流中关键 Agent 的结构化输出格式。
 Vibe-Trading 的 Swarm 运行时暂不支持原生 Pydantic structured_output，
-但 Agent 的 system_prompt 中已嵌入对应的输出指令（见 trading_agents_workflow.yaml）。
+但 Agent 的 system_prompt 中已嵌入对应的输出指令（见 analyst_research_team.yaml）。
 当 Vibe-Trading 未来支持结构化输出模式时，可直接使用这些模型。
 
 使用方法参考:
-    from src.swarm.schemas_trading_agents import (
+    from src.swarm.schemas_analyst_research_team import (
         SentimentReport, ResearchPlan, TraderProposal, PortfolioDecision
     )
 """

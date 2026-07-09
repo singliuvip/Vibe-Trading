@@ -87,6 +87,11 @@ class ToolRegistry:
     def tool_names(self) -> List[str]:
         return list(self._tools.keys())
 
+    @property
+    def tools(self) -> Dict[str, BaseTool]:
+        """Return a read-only view of registered tools."""
+        return dict(self._tools)
+
     def __len__(self) -> int:
         return len(self._tools)
 

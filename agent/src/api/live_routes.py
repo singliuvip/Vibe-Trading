@@ -141,6 +141,7 @@ class LiveBrokerStatus(BaseModel):
     mandate: Optional[ActiveMandateState] = None
     runner: RunnerLivenessState
     halted: bool = Field(..., description="Per-broker OR global kill switch is tripped")
+    sdk_status: Optional[dict] = Field(None, description="SDK connector health (broker_sdk transport only)")
 
 
 class LiveStatusResponse(BaseModel):
@@ -156,6 +157,7 @@ class LiveStatusResponse(BaseModel):
 
 _runner_tasks: Dict[str, "asyncio.Task[Any]"] = {}
 _runner_factory: Optional[Any] = None
+_sdk_paused: set[str] = set()
 
 
 # ============================================================================
@@ -274,8 +276,17 @@ def _fetch_broker_ceilings(broker: str) -> Optional[Dict[str, Any]]:
 def _known_live_brokers() -> List[str]:
     """Return the recognized live-broker keys (SPEC §7.2)."""
     from src.config.schema import LIVE_BROKER_SERVER_KEYS
+    from src.trading.profiles import list_profiles
 
-    return sorted(LIVE_BROKER_SERVER_KEYS)
+    # MCP-based live brokers (remote_mcp transport)
+    keys: set[str] = set(LIVE_BROKER_SERVER_KEYS)
+
+    # SDK-based connectors with live profiles (broker_sdk transport)
+    for profile in list_profiles():
+        if profile.environment == "live":
+            keys.add(profile.connector)
+
+    return sorted(keys)
 
 
 def _oauth_token_present(broker: str) -> bool:
@@ -288,6 +299,89 @@ def _oauth_token_present(broker: str) -> bool:
     except Exception:  # pragma: no cover - status must never raise
         logger.debug("oauth presence check failed for %s", broker, exc_info=True)
         return False
+
+
+def _sdk_connector_status(broker: str) -> Optional[dict]:
+    """Fetch SDK connector health for broker_sdk transport connectors."""
+    from src.trading.service import _SDK_CONNECTOR_MODULES, live_runner_profile_for_broker
+
+    if broker not in _SDK_CONNECTOR_MODULES:
+        return None
+    if broker in _sdk_paused:
+        return {"status": "paused", "error": "runner stopped by user"}
+    try:
+        import importlib
+        mod = importlib.import_module(_SDK_CONNECTOR_MODULES[broker])
+
+        # Resolve the live profile and merge it with any on-disk config
+        profile = live_runner_profile_for_broker(broker)
+        profile_overrides = dict(profile.config) if profile else {}
+
+        import json
+        from src.config.paths import get_runtime_root
+
+        config_path = get_runtime_root() / f"{broker}.json"
+        disk_data: dict = {}
+        if config_path.exists():
+            try:
+                disk_data = json.loads(config_path.read_text(encoding="utf-8"))
+            except Exception:
+                logger.debug("failed to read %s config for %s", broker, exc_info=True)
+
+        config = mod.build_config(disk_data, profile_overrides)
+
+        result = mod.check_status(config)
+        safe: dict = {"status": result.get("status"), "platform": result.get("platform")}
+
+        # Account data: prefer check_status embedded account, fall back to
+        # a dedicated get_account_snapshot call.
+        account = result.get("account")
+        if not isinstance(account, dict):
+            snapshot_fn = getattr(mod, "get_account_snapshot", None)
+            if snapshot_fn and result.get("status") == "ok":
+                try:
+                    snap = snapshot_fn(config)
+                    if isinstance(snap, dict):
+                        account = {
+                            "account_id": snap.get("account_id", ""),
+                            "total_value": snap.get("total_value"),
+                            "cash": snap.get("cash"),
+                            "market_value": snap.get("market_value"),
+                        }
+                except Exception:
+                    logger.debug("account snapshot failed for %s", broker, exc_info=True)
+
+        if isinstance(account, dict):
+            safe["account"] = {k: v for k, v in account.items() if k in ("account_id", "total_value", "cash", "market_value")}
+
+        if result.get("status") != "ok":
+            safe["error"] = result.get("error", "unknown")
+        else:
+            # Active heartbeat probe
+            safe["heartbeat"] = _sdk_heartbeat_probe(broker, mod)
+            # Write SDK heartbeat so runner liveness detects this broker as alive
+            try:
+                from src.live.runtime.liveness import write_heartbeat
+                write_heartbeat(broker)
+            except Exception:
+                logger.debug("sdk heartbeat write failed for %s", broker, exc_info=True)
+        return safe
+    except Exception:
+        logger.debug("sdk status check failed for %s", broker, exc_info=True)
+        return {"status": "error", "error": "check failed"}
+
+
+def _sdk_heartbeat_probe(broker: str, mod: Any) -> str:
+    """Active connection probe for SDK connectors that support it."""
+    probe_fn = getattr(mod, "probe_connection", None)
+    if probe_fn is None:
+        return "not_supported"
+    try:
+        alive = probe_fn()
+        return "ok" if isinstance(alive, dict) and alive.get("status") == "ok" else "unresponsive"
+    except Exception:
+        logger.debug("sdk heartbeat probe failed for %s", broker, exc_info=True)
+        return "unresponsive"
 
 
 def _active_mandate_state(broker: str) -> Optional[ActiveMandateState]:
@@ -567,16 +661,21 @@ def register_live_routes(
         h = _host()
         statuses: List[LiveBrokerStatus] = []
         for key in brokers:
+            sdk = _sdk_connector_status(key) if key in known else None
+            # SDK connectors are "authorized" when connected — auth is handled
+            # by the trading terminal (miniQMT, etc.), not by OAuth.
+            sdk_authorized = isinstance(sdk, dict) and sdk.get("status") == "ok"
             statuses.append(
                 LiveBrokerStatus(
                     auth=BrokerAuthState(
                         broker=key,
-                        oauth_token_present=_oauth_token_present(key),
+                        oauth_token_present=_oauth_token_present(key) or sdk_authorized,
                         is_live_broker=key in known,
                     ),
                     mandate=h._active_mandate_state(key),
                     runner=_runner_liveness_state(key),
                     halted=halt_flag_set(broker=key),
+                    sdk_status=sdk,
                 )
             )
 

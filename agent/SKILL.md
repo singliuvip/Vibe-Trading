@@ -101,9 +101,43 @@ Example workflow:
 - **Macro/Rates/FX Desk**: rates + FX + commodities → macro PM
 - **Quant Strategy Desk**: screening → factor research → backtest → risk audit
 - **Risk Committee**: drawdown, tail risk, regime analysis
+- **Analyst Research Team**: 17-agent, 8-layer deep-dive research pipeline — technical, sentiment, news, and fundamentals analysts → bull/bear debate (2 rounds) → research manager → trader → risk debate (aggressive/conservative/neutral, 2 rounds) → portfolio manager final decision
 - And 22 more specialized teams
 
 Use `list_swarm_presets()` to see all teams, then `run_swarm()` to execute.
+
+### Analyst Research Team
+
+A comprehensive 17-agent, 8-layer DAG research pipeline that simulates an institutional sell-side research desk. It covers the full investment workflow from initial data collection to final portfolio manager decision.
+
+**Pipeline stages:**
+
+1. **Research Analysis (Layer 0)** — 4 analysts work in parallel:
+   - Market Analyst: technical analysis (trends, momentum, volatility, chart patterns)
+   - Sentiment Analyst: market psychology, institutional positioning, retail sentiment, analyst consensus
+   - News Analyst: company news, macro backdrop, regulatory developments
+   - Fundamentals Analyst: financial analysis (revenue, profitability, balance sheet, valuation)
+
+2. **Bull/Bear Debate Round 1 (Layer 1)** — Bull researcher builds the strongest long thesis; bear researcher constructs the downside risk case
+
+3. **Bull/Bear Debate Round 2 (Layer 2)** — Cross-rebuttals: each side responds to the other's arguments
+
+4. **Research Manager (Layer 3)** — Judges the debate and issues an investment recommendation (Buy/Overweight/Hold/Underweight/Sell)
+
+5. **Trader (Layer 4)** — Converts the recommendation into a concrete trade proposal (entry, stop-loss, position sizing, execution strategy)
+
+6. **Risk Debate Round 1 (Layer 5)** — 3 risk analysts in parallel:
+   - Aggressive: high-risk/high-reward perspective
+   - Conservative: capital preservation perspective
+   - Neutral: balanced perspective
+
+7. **Risk Debate Round 2 (Layer 6)** — Cross-rebuttals and synthesis among all three risk views
+
+8. **Portfolio Manager (Layer 7)** — Final investment decision weighing all inputs
+
+**Usage**: Call `run_swarm("analyst_research_team", params={"target": "600519.SH", "market": "A-shares"})` via MCP.
+
+**Requirements**: Requires `OPENAI_API_KEY` and `LANGCHAIN_MODEL_NAME` for LLM worker agents.
 
 ### Alpha Zoo (452 pre-built alphas)
 One-line cross-sectional IC / IR / alive-reversed-dead categorisation across four bundled zoos:

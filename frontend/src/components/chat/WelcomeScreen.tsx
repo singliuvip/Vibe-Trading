@@ -96,6 +96,11 @@ const CATEGORIES: Category[] = [
         descKey: "welcome.examples.quantStrategyDeskDesc",
         promptKey: "welcome.examples.quantStrategyDeskPrompt",
       },
+      {
+        titleKey: "welcome.examples.analystResearchTeam",
+        descKey: "welcome.examples.analystResearchTeamDesc",
+        promptKey: "welcome.examples.analystResearchTeamPrompt",
+      },
     ],
   },
   {

@@ -95,6 +95,16 @@ _PRESET_KEYWORDS: list[tuple[str, list[str], float]] = [
         0.85,
     ),
     (
+        "analyst_research_team",
+        [
+            "analyst research team",
+            "analyst team",
+            "分析师研究团队",
+            "分析师团队",
+        ],
+        0.9,
+    ),
+    (
         "factor_research_committee",
         [
             r"factor\s+research",
@@ -615,6 +625,7 @@ def _build_variables(preset_name: str, prompt: str) -> dict[str, str]:
         "equity_research_team": {"market": market, "goal": g},
         "quant_strategy_desk": {"market": market, "goal": g},
         "risk_committee": {"goal": g},
+        "analyst_research_team": {"market": market, "target": g},
         "factor_research_committee": {"market": market, "factor_type": "value"},
         "event_driven_task_force": {"market": market, "event_type": "all types"},
         "etf_allocation_desk": {"risk_profile": _risk_to_etf_profile(risk), "market": market},
@@ -657,7 +668,7 @@ class SwarmTool(BaseTool):
     description = (
         "Run a multi-agent swarm team for complex analysis tasks. "
         "Provide a natural language prompt and, when known, an explicit preset_name from agent/src/swarm/presets "
-        "(e.g. equity_research_team, quant_strategy_desk, global_allocation_committee, risk_committee) "
+        "(e.g. equity_research_team, analyst_research_team, quant_strategy_desk, global_allocation_committee, risk_committee) "
         "so follow-up/continuation prompts do not lose routing context. "
         "Example: run_swarm(prompt='Analyze A-share new energy opportunities for Q2 2026', preset_name='equity_research_team')"
     )

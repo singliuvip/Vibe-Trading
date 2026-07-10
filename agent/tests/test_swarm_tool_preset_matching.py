@@ -57,3 +57,25 @@ def test_swarm_tool_rejects_ambiguous_continuation_before_starting_run() -> None
 
     assert payload["status"] == "error"
     assert "Ambiguous continuation" in payload["error"]
+
+
+def test_analyst_research_team_english_keyword_match() -> None:
+    """English keywords 'analyst research team' should route to analyst_research_team."""
+    prompt = "Use the analyst research team to evaluate TSLA given current market conditions"
+    assert swarm_tool._match_preset(prompt) == "analyst_research_team"
+
+
+def test_analyst_research_team_chinese_keyword_match() -> None:
+    """Chinese keywords '分析师研究团队' should route to analyst_research_team."""
+    prompt = "用分析师研究团队评估一下茅台的投资价值"
+    assert swarm_tool._match_preset(prompt) == "analyst_research_team"
+
+
+def test_analyst_research_team_explicit_preset_name() -> None:
+    """Explicit preset name should match analyst_research_team."""
+    preset, error = swarm_tool._resolve_preset(
+        "Analyze NVDA",
+        explicit_preset="analyst_research_team",
+    )
+    assert error is None
+    assert preset == "analyst_research_team"

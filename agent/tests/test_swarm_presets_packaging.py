@@ -19,7 +19,7 @@ from src.swarm.presets import PRESETS_DIR, list_presets, load_preset
 
 # Lock to the canonical roster shipped today. Bump intentionally if a preset
 # is added or removed so a release that silently drops files is caught here.
-EXPECTED_PRESET_COUNT = 30
+EXPECTED_PRESET_COUNT = 31
 
 
 def test_presets_dir_lives_inside_swarm_package() -> None:
@@ -59,9 +59,17 @@ def test_every_preset_yaml_is_loadable() -> None:
 
 @pytest.mark.parametrize(
     "preset_name",
-    ["investment_committee", "quant_strategy_desk", "risk_committee"],
+    ["investment_committee", "quant_strategy_desk", "risk_committee", "analyst_research_team"],
 )
 def test_known_presets_load(preset_name: str) -> None:
     """Spot-check a few headline presets advertised in docs/UI."""
     data = load_preset(preset_name)
     assert data["agents"], f"{preset_name} has no agents"
+
+
+def test_analyst_research_team_is_routable() -> None:
+    """analyst_research_team must be in the routing table, not just on disk."""
+    from src.tools.swarm_tool import _PRESET_NAMES, _normalize_preset_name
+
+    assert "analyst_research_team" in _PRESET_NAMES
+    assert _normalize_preset_name("analyst_research_team") == "analyst_research_team"

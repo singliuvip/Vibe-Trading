@@ -901,11 +901,11 @@ def list_swarm_presets() -> str:
 async def run_swarm(
     preset_name: str,
     variables: dict[str, str],
-    wait_seconds: int = 3600,
-    start_only: bool = False,
+    wait_seconds: int = 45,
+    start_only: bool = True,
     ctx: Context | None = None,
 ) -> str:
-    """Run a swarm multi-agent team and stream progress back to the caller.
+    """Run a swarm multi-agent team and return immediately with a run_id.
 
     Assembles a team of specialized agents that collaborate through a DAG workflow.
     For example, the 'investment_committee' preset runs bull analyst, bear analyst,
@@ -913,19 +913,25 @@ async def run_swarm(
 
     Use list_swarm_presets() to see available presets and their required variables.
 
-    The tool keeps the MCP call open via ``Context.report_progress`` while the
-    swarm runs, so the caller sees live "N/M tasks complete" updates instead
-    of timing out silently. Only if ``wait_seconds`` is exhausted does the
-    tool return early with the current ``run_id`` — call ``get_run_result``
-    afterwards to fetch the final report.
+    By default (``start_only=True``), the tool kicks off the run and returns
+    immediately with ``run_id`` + current status. Use ``get_run_result(run_id)``
+    to poll for the final result — this pattern is safe for Feishu/IM channels
+    where long-running synchronous calls would block the conversation.
+
+    Set ``start_only=False`` and increase ``wait_seconds`` only when the MCP
+    client supports long-lived tool calls with progress notifications (e.g.
+    Claude Desktop). In that mode the tool keeps the MCP call open via
+    ``Context.report_progress`` while the swarm runs, so the caller sees live
+    "N/M tasks complete" updates instead of timing out silently. Only if
+    ``wait_seconds`` is exhausted does the tool return early with the current
+    ``run_id`` — call ``get_run_result`` afterwards to fetch the final report.
 
     Args:
         preset_name: Swarm preset name (e.g. 'investment_committee', 'quant_strategy_desk').
         variables: Required variables for the preset (e.g. {"target": "AAPL.US", "market": "US"}).
-        wait_seconds: Maximum seconds to keep the MCP call open. Default 3600
-            (1 hour); the progress-notification keepalive means the transport
-            stays connected for the full budget.
-        start_only: If True, kick off the run and return immediately with
+        wait_seconds: Maximum seconds to keep the MCP call open when
+            ``start_only=False``. Default 45 (matching Tier2 workflow timeout).
+        start_only: If True (default), kick off the run and return immediately with
             ``run_id`` + current status. Ignores ``wait_seconds``.
     """
     import asyncio

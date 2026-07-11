@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from concurrent.futures import (
     Future,
     ThreadPoolExecutor,
@@ -144,6 +145,25 @@ class SwarmRuntime:
             daemon=True,
         )
         thread.start()
+
+        # Wait briefly for the background thread to either update run to "running"
+        # or fail. This prevents returning a run that will never progress.
+        time.sleep(0.1)  # yield to let the thread start
+        if run.status == RunStatus.pending:
+            # Check if thread is still alive
+            if not thread.is_alive():
+                # Thread died immediately
+                run.status = RunStatus.failed
+                self._store.update_run(run)
+                self._emit_event(run.id, self._make_event("run_started"))
+                self._emit_event(
+                    run.id,
+                    self._make_event(
+                        "run_failed",
+                        data={"error": "Background thread failed to start or exited immediately"},
+                    ),
+                )
+                logger.error("Swarm run %s failed: background thread died immediately", run.id)
 
         return run
 

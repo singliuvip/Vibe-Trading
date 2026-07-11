@@ -213,6 +213,36 @@ def load_skill(name: str) -> str:
     return json.dumps({"status": "ok", "skill": name, "content": content}, ensure_ascii=False)
 
 
+@mcp.tool
+def provider_doctor() -> str:
+    """Return a redacted LLM provider diagnostics snapshot.
+
+    Reports the effective provider, model, adapter type, base URL host,
+    API key presence, package versions, proxy settings, and the result of
+    a minimal chat ping. All secrets are redacted.
+
+    Use this to verify that the LLM provider is correctly configured before
+    running expensive operations like swarm analysis.
+    """
+    from src.providers.llm import provider_diagnostics, build_llm
+
+    diag = provider_diagnostics()
+
+    # Add a quick connectivity check (non-streaming, 1 minimal message)
+    ping_result = "skipped"
+    try:
+        llm = build_llm()
+        if llm is not None:
+            from langchain_core.messages import HumanMessage
+            resp = llm.invoke([HumanMessage(content="respond with the single word: ok")])
+            ping_result = "ok" if resp and "ok" in (resp.content or "").lower() else "unexpected"
+    except Exception as exc:
+        ping_result = f"failed: {exc}"
+
+    diag["ping"] = ping_result
+    return json.dumps(diag, ensure_ascii=False, indent=2)
+
+
 # ---------------------------------------------------------------------------
 # Goal tools
 # ---------------------------------------------------------------------------

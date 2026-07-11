@@ -520,9 +520,9 @@ def run_worker(
 
             # A transient mid-stream hiccup (connection reset) used to be
             # absorbed by ChatLLM's silent non-streaming fallback; it now
-            # surfaces as ProviderStreamError, so retry the stream exactly
-            # once before taking the existing failure path. Deterministic
-            # 4xx errors skip the retry and fail immediately.
+            # surfaces as ProviderStreamError, so retry the stream up to
+            # twice (three total attempts) with increasing backoff.
+            # Deterministic 4xx errors skip the retry and fail immediately.
             try:
                 response = _stream_once()
             except ProviderStreamError as stream_exc:
@@ -530,16 +530,33 @@ def run_worker(
                     raise
                 logger.warning(
                     "Provider stream failed for agent=%s task=%s iteration=%d "
-                    "(provider=%s model=%s); retrying once: %s",
+                    "(provider=%s model=%s); retrying in %.1fs: %s",
                     agent_id,
                     task_id,
                     iteration,
                     stream_exc.provider,
                     stream_exc.model,
+                    _STREAM_RETRY_DELAY_S,
                     stream_exc,
                 )
                 time.sleep(_STREAM_RETRY_DELAY_S)
-                response = _stream_once()
+                try:
+                    response = _stream_once()
+                except ProviderStreamError as retry_exc:
+                    if not retry_exc.retryable:
+                        raise
+                    logger.warning(
+                        "Second provider stream attempt also failed for agent=%s task=%s "
+                        "iteration=%d (provider=%s model=%s); retrying once more: %s",
+                        agent_id,
+                        task_id,
+                        iteration,
+                        retry_exc.provider,
+                        retry_exc.model,
+                        retry_exc,
+                    )
+                    time.sleep(_STREAM_RETRY_DELAY_S * 2)  # double backoff
+                    response = _stream_once()
         except Exception as exc:
             error_msg = f"LLM call failed at iteration {iteration}: {exc}"
             logger.warning(error_msg)

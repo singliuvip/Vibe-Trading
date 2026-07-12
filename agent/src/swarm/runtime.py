@@ -170,17 +170,27 @@ class SwarmRuntime:
     def cancel_run(self, run_id: str) -> bool:
         """Signal cancellation for a running swarm.
 
+        Writes a ``.cancel`` marker file to the run directory so that
+        cancellation is visible across all ``SwarmRuntime`` instances and
+        survives server restarts. The background thread picks it up at the
+        next layer boundary.
+
         Args:
             run_id: ID of the run to cancel.
 
         Returns:
             True if cancellation was signalled, False if run not found.
         """
+        run_dir = self._store.run_dir(run_id)
+        if not run_dir.exists():
+            return False
+        # File-level cancel marker — visible across instances
+        (run_dir / ".cancel").touch()
+        # In-process cancel event for the same-instance fast path
         with self._lock:
             cancel_event = self._cancel_events.get(run_id)
-        if cancel_event is None:
-            return False
-        cancel_event.set()
+        if cancel_event is not None:
+            cancel_event.set()
         return True
 
     def _emit_event(self, run_id: str, event: SwarmEvent) -> None:
@@ -281,9 +291,12 @@ class SwarmRuntime:
 
         try:
             for layer_idx, layer_task_ids in enumerate(layers):
-                # Check cancellation between layers
-                if cancel_event.is_set():
+                # Check cancellation between layers (event + file marker)
+                file_cancelled = (run_dir / ".cancel").exists()
+                if cancel_event.is_set() or file_cancelled:
                     logger.info("Run %s cancelled at layer %d", run_id, layer_idx)
+                    if file_cancelled and not cancel_event.is_set():
+                        cancel_event.set()
                     self._cancel_remaining_tasks(task_store, layer_task_ids, run.tasks)
                     all_succeeded = False
                     break

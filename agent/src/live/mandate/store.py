@@ -39,25 +39,41 @@ logger = logging.getLogger(__name__)
 _MANDATE_FILENAME = "mandate.json"
 
 
-def load_mandate(broker: str) -> Mandate | None:
-    """Load the committed mandate for ``broker`` from the protected store.
+def load_mandate(broker: str, account_id: str | None = None) -> Mandate | None:
+    """Load the committed mandate for a scope from the protected store.
 
-    Reads ``<runtime_root>/live/<broker>/mandate.json`` (written 0600 by the
-    consent commit path). Parsing is strict and fail-closed: any absent file,
-    unreadable file, malformed JSON, or structurally invalid record returns
-    ``None`` so the gate denies. ``expires_at`` and ``schema_version`` are
-    carried through verbatim for the gate to evaluate.
+    Reads ``<runtime_root>/live/<broker>/mandate.json`` (or
+    ``<runtime_root>/live/<broker>/<account_id>/mandate.json`` when
+    ``account_id`` is provided). Written 0600 by the consent commit path.
+    Parsing is strict and fail-closed: any absent file, unreadable file,
+    malformed JSON, or structurally invalid record returns ``None`` so the
+    gate denies. ``expires_at`` and ``schema_version`` are carried through
+    verbatim for the gate to evaluate.
+
+    When ``account_id`` is provided and no scoped mandate exists, automatic
+    migration of a legacy broker-level mandate is attempted (idempotent).
 
     Args:
         broker: Broker key, e.g. ``"robinhood"``.
+        account_id: Optional account id for per-account mandate isolation.
+            When None, uses the broker-level path (backward-compatible).
 
     Returns:
-        The committed :class:`~src.live.mandate.model.Mandate`, or ``None`` when
-        no valid mandate is on file.
+        The committed :class:`~src.live.mandate.model.Mandate`, or ``None``
+        when no valid mandate is on file.
     """
-    path = broker_dir(broker) / _MANDATE_FILENAME
-    if not path.is_file():
-        return None
+    if account_id is not None:
+        path = broker_dir(broker, account_id) / _MANDATE_FILENAME
+        if not path.is_file():
+            # Auto-migrate legacy broker-level mandate to scoped path (idempotent).
+            migrate_legacy_mandate(broker, account_id)
+            path = broker_dir(broker, account_id) / _MANDATE_FILENAME
+            if not path.is_file():
+                return None
+    else:
+        path = broker_dir(broker) / _MANDATE_FILENAME
+        if not path.is_file():
+            return None
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -130,3 +146,60 @@ def _require_dict(value: object, field: str) -> dict:
 def _opt_float(value: object) -> float | None:
     """Coerce an optional numeric field to ``float | None``."""
     return None if value is None else float(value)
+
+
+# ---------------------------------------------------------------------------
+# Legacy migration (idempotent, safe to call on every load)
+# ---------------------------------------------------------------------------
+
+
+def migrate_legacy_mandate(broker: str, target_account_id: str = "default") -> bool:
+    """Migrate a broker-level mandate to an account-scoped path.
+
+    For virtual broker: moves ``live/virtual/mandate.json`` →
+    ``live/virtual/default/mandate.json`` if the broker-level file exists
+    and the scoped path does not. Idempotent — if either condition is not
+    met, returns ``False`` without modifying any files.
+
+    Returns:
+        ``True`` if migration occurred, ``False`` otherwise.
+    """
+    legacy = broker_dir(broker) / _MANDATE_FILENAME
+    scoped = broker_dir(broker, target_account_id) / _MANDATE_FILENAME
+
+    if not legacy.is_file():
+        return False
+    if scoped.is_file():
+        return False  # scoped already exists; don't overwrite
+
+    scoped.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    legacy.rename(scoped)
+    logger.info("migrated mandate %s → %s", legacy, scoped)
+
+    # Also migrate the trade counter if it exists.
+    _migrate_legacy_counter(broker, target_account_id)
+
+    return True
+
+
+def _migrate_legacy_counter(broker: str, target_account_id: str = "default") -> bool:
+    """Migrate a broker-level trade counter to an account-scoped path.
+
+    Moves ``live/<broker>/trade_counter.json`` →
+    ``live/<broker>/<account_id>/trade_counter.json``.
+
+    Returns:
+        ``True`` if migration occurred, ``False`` otherwise.
+    """
+    legacy = broker_dir(broker) / "trade_counter.json"
+    scoped = broker_dir(broker, target_account_id) / "trade_counter.json"
+
+    if not legacy.is_file():
+        return False
+    if scoped.is_file():
+        return False
+
+    scoped.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    legacy.rename(scoped)
+    logger.info("migrated counter %s → %s", legacy, scoped)
+    return True

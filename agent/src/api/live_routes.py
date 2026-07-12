@@ -53,6 +53,11 @@ class CommitMandateRequest(BaseModel):
     consent_ack: bool = Field(..., description="Explicit affirmative; must be true")
     session_id: Optional[str] = None
     account_ref: str = Field("", max_length=128)
+    account_id: Optional[str] = Field(
+        None,
+        max_length=64,
+        description="Account id within broker (e.g. 'default' for virtual US, 'cn-default' for virtual CN)",
+    )
     lifetime_days: int = Field(30, ge=1, le=365)
 
 
@@ -134,6 +139,42 @@ class RunnerLivenessState(BaseModel):
     last_tick_age_seconds: Optional[float] = None
 
 
+class BrokerRuntimeCapability(BaseModel):
+    """Runtime capability snapshot for a broker (SPEC §7.5 extension).
+
+    Communicates what the broker channel can do right now, independent of
+    mandate/runner state. This lets the frontend distinguish "paper-ready"
+    connectors (e.g. virtual) from "needs OAuth + mandate" real brokers.
+    """
+
+    profile_id: str = Field("", description="Resolved trading profile id")
+    environment: str = Field("", description="'paper' or 'live'")
+    direct_trading_ready: bool = Field(
+        False,
+        description="Whether direct trading is available right now (paper, no mandate-blocking)",
+    )
+    direct_trading_supported: bool = Field(
+        False,
+        description="Whether direct trading is supported at all for this profile",
+    )
+    direct_trading_requires_mandate: bool = Field(
+        False,
+        description="Whether direct trading requires a committed mandate",
+    )
+    requires_oauth: bool = Field(
+        True,
+        description="Whether OAuth authorization is required before any operation",
+    )
+    runner_supported: bool = Field(
+        False,
+        description="Whether the profile supports the persistent LiveRunner",
+    )
+    runner_requires_mandate: bool = Field(
+        True,
+        description="Whether the LiveRunner requires a committed mandate",
+    )
+
+
 class LiveBrokerStatus(BaseModel):
     """Combined live-channel status for a single broker."""
 
@@ -141,6 +182,9 @@ class LiveBrokerStatus(BaseModel):
     mandate: Optional[ActiveMandateState] = None
     runner: RunnerLivenessState
     halted: bool = Field(..., description="Per-broker OR global kill switch is tripped")
+    runtime: Optional[BrokerRuntimeCapability] = Field(
+        None, description="Runtime capability snapshot"
+    )
 
 
 class LiveStatusResponse(BaseModel):
@@ -279,7 +323,12 @@ def _known_live_brokers() -> List[str]:
 
 
 def _oauth_token_present(broker: str) -> bool:
-    """Return whether an OAuth token cache exists for a broker (C2 auth state)."""
+    """Return whether an OAuth token cache exists for a broker (C2 auth state).
+
+    Virtual broker is always considered authorized (no OAuth needed).
+    """
+    if broker == "virtual":
+        return True
     try:
         from src.live.paths import broker_dir
 
@@ -290,11 +339,26 @@ def _oauth_token_present(broker: str) -> bool:
         return False
 
 
-def _active_mandate_state(broker: str) -> Optional[ActiveMandateState]:
-    """Build the active-mandate snapshot for a broker, or ``None`` when absent."""
+def _active_mandate_state(broker: str, account_id: str | None = None) -> Optional[ActiveMandateState]:
+    """Build the active-mandate snapshot for a broker, or ``None`` when absent.
+
+    When ``account_id`` is provided, loads from the scoped path
+    (e.g. ``virtual/default/mandate.json``). For the virtual broker without an
+    explicit ``account_id``, tries ``"default"`` first before falling back
+    to the broker-level path for backward compatibility.
+    """
     from src.live.mandate.store import load_mandate
 
-    mandate = load_mandate(broker)
+    if account_id is not None:
+        mandate = load_mandate(broker, account_id=account_id)
+    elif broker == "virtual":
+        # Virtual broker: try scoped path first, fall back to legacy broker-level path.
+        mandate = load_mandate(broker, account_id="default")
+        if mandate is None:
+            mandate = load_mandate(broker)
+    else:
+        mandate = load_mandate(broker)
+
     if mandate is None:
         return None
 
@@ -333,6 +397,41 @@ def _active_mandate_state(broker: str) -> Optional[ActiveMandateState]:
     )
 
 
+def _broker_runtime_capability(broker: str) -> Optional[BrokerRuntimeCapability]:
+    """Return the runtime capability snapshot for *broker*.
+
+    Virtual broker is always direct-trading-ready (paper, no OAuth). Real
+    brokers require OAuth and mandate for all operations.
+    """
+    try:
+        from src.trading.service import (
+            connector_profile_id_for_broker,
+            profile_supports_live_runner,
+        )
+        from src.trading.profiles import profile_by_id
+
+        profile_id = connector_profile_id_for_broker(broker)
+        profile = profile_by_id(profile_id)
+        is_virtual = broker == "virtual"
+        from src.trading.types import MANDATE_REQUIRED_CAPABILITY
+
+        requires_mandate = MANDATE_REQUIRED_CAPABILITY in profile.capabilities
+        direct_ready = is_virtual and profile.environment == "paper"
+        return BrokerRuntimeCapability(
+            profile_id=profile.id,
+            environment=profile.environment,
+            direct_trading_ready=direct_ready and not requires_mandate,
+            direct_trading_supported=direct_ready,
+            direct_trading_requires_mandate=requires_mandate,
+            requires_oauth=not is_virtual,
+            runner_supported=profile_supports_live_runner(profile),
+            runner_requires_mandate=True,
+        )
+    except Exception:
+        logger.debug("runtime capability lookup failed for %s", broker, exc_info=True)
+        return None
+
+
 def _runner_liveness_state(broker: str) -> RunnerLivenessState:
     """Build the runner-liveness snapshot for a broker (SPEC §7.5 contract)."""
     alive = False
@@ -356,10 +455,14 @@ def _build_live_runner(broker: str) -> Any:
     """Construct a fully-wired ``LiveRunner`` for a broker (SPEC §7.5 R-INT).
 
     Wires the runner to the real surfaces — the public ``SessionService`` agent
-    caller (never the protected loop internals), the broker's READ/WRITE MCP
-    tools, the R4 reconciler, the R1 scheduler, and R3 market-hours triggers —
+    caller (never the protected loop internals), the broker's READ/WRITE tools,
+    the R4 reconciler, the R1 scheduler, and R3 market-hours triggers —
     and injects an audit ``event_callback`` so every autonomous live action is
     broadcast as a ``live.action`` SSE event on the runner's session bus.
+
+    Supports:
+    - ``remote_mcp`` brokers (e.g. Robinhood) via MCP remote tools.
+    - ``broker_sdk`` brokers (e.g. virtual) via local SDK calls.
 
     Raises:
         LiveRunnerUnavailable: When the broker channel is not configured.
@@ -376,8 +479,85 @@ def _build_live_runner(broker: str) -> Any:
     from src.live.runtime.runner import LiveRunner
     from src.live.runtime.scheduler import Scheduler
     from src.live.runtime.triggers import Trigger
-    from src.trading.service import runner_tool_name
+    from src.trading.service import (
+        connector_profile_id_for_broker,
+        runner_tool_name,
+    )
 
+    svc = h._get_session_service()
+    session = svc.create_session(title=f"live-runner:{broker}")
+    session_id = session.session_id
+
+    async def _agent_caller(sid: str, prompt: str) -> Dict[str, Any]:
+        return await svc.send_message(sid, prompt)
+
+    def _audit_with_bus(event: Any) -> Dict[str, Any]:
+        return write_live_action(
+            event,
+            event_callback=lambda etype, record: svc.event_bus.emit(session_id, etype, record),
+        )
+
+    # ── Virtual broker (broker_sdk) ──────────────────────────────────────
+    if broker == "virtual":
+        from src.trading import service as trading_service
+
+        profile_id = connector_profile_id_for_broker("virtual")
+
+        def _virtual_read_positions() -> Dict[str, Any]:
+            return trading_service.get_positions(profile_id)
+
+        def _virtual_read_balance() -> Dict[str, Any]:
+            return trading_service.get_account(profile_id)
+
+        def _virtual_read_open_orders() -> Dict[str, Any]:
+            return trading_service.get_open_orders(profile_id, include_executions=True)
+
+        def _virtual_submit(order: Dict[str, Any]) -> Dict[str, Any]:
+            if order.get("action") == "cancel":
+                return trading_service.cancel_order(
+                    order_id=order.get("order_id", ""),
+                    profile_id=profile_id,
+                    symbol=order.get("symbol"),
+                    session_id=session_id,
+                )
+            return trading_service.place_order(
+                symbol=order.get("symbol", ""),
+                profile_id=profile_id,
+                side=order.get("side", ""),
+                quantity=order.get("quantity"),
+                notional=order.get("notional"),
+                order_type=order.get("order_type", "market"),
+                limit_price=order.get("limit_price"),
+                time_in_force=order.get("time_in_force", "day"),
+                session_id=session_id,
+            )
+
+        runner_holder: Dict[str, Any] = {}
+
+        async def _virtual_on_fire(_job: Any) -> None:
+            runner = runner_holder.get("runner")
+            if runner is not None:
+                await runner.run_once()
+
+        scheduler = Scheduler(_virtual_on_fire)
+
+        runner = LiveRunner(
+            broker,
+            agent_caller=_agent_caller,
+            reconcile_fn=reconcile,
+            read_positions=_virtual_read_positions,
+            read_balance=_virtual_read_balance,
+            read_open_orders=_virtual_read_open_orders,
+            submit_fn=_virtual_submit,
+            write_audit_fn=_audit_with_bus,
+            scheduler=scheduler,
+            triggers=[Trigger.interval(interval_ms=60000)],
+            session_id=session_id,
+        )
+        runner_holder["runner"] = runner
+        return runner
+
+    # ── Remote MCP brokers (e.g. Robinhood) ─────────────────────────────
     def _tool(operation: str) -> str:
         remote_tool = runner_tool_name(broker, operation)
         if remote_tool is None:
@@ -403,23 +583,16 @@ def _build_live_runner(broker: str) -> Any:
             return adapter.call_tool(cancel_order_tool, order)
         return adapter.call_tool(submit_order_tool, order)
 
-    svc = h._get_session_service()
-    session = svc.create_session(title=f"live-runner:{broker}")
-    session_id = session.session_id
-
-    async def _agent_caller(sid: str, prompt: str) -> Dict[str, Any]:
-        return await svc.send_message(sid, prompt)
-
     def _audit_with_bus(event: Any) -> Dict[str, Any]:
         return write_live_action(
             event,
             event_callback=lambda etype, record: svc.event_bus.emit(session_id, etype, record),
         )
 
-    runner_holder: Dict[str, Any] = {}
+    runner_holder_mcp: Dict[str, Any] = {}
 
     async def _on_fire(_job: Any) -> None:
-        runner = runner_holder.get("runner")
+        runner = runner_holder_mcp.get("runner")
         if runner is not None:
             await runner.run_once()
 
@@ -438,7 +611,7 @@ def _build_live_runner(broker: str) -> Any:
         triggers=[Trigger.market("us_equity")],
         session_id=session_id,
     )
-    runner_holder["runner"] = runner
+    runner_holder_mcp["runner"] = runner
     return runner
 
 
@@ -494,6 +667,7 @@ def register_live_routes(
                 adjustments=payload.adjustments,
                 consent_ack=payload.consent_ack,
                 broker=payload.broker,
+                account_id=payload.account_id,
                 account_ref=payload.account_ref,
                 session_id=payload.session_id,
                 ceilings_ref=broker_ceilings,
@@ -567,6 +741,7 @@ def register_live_routes(
         h = _host()
         statuses: List[LiveBrokerStatus] = []
         for key in brokers:
+            runtime_cap = _broker_runtime_capability(key)
             statuses.append(
                 LiveBrokerStatus(
                     auth=BrokerAuthState(
@@ -577,6 +752,7 @@ def register_live_routes(
                     mandate=h._active_mandate_state(key),
                     runner=_runner_liveness_state(key),
                     halted=halt_flag_set(broker=key),
+                    runtime=runtime_cap,
                 )
             )
 
@@ -594,6 +770,24 @@ def register_live_routes(
         from src.trading.service import connector_profile_id_for_broker
 
         connector_profile = connector_profile_id_for_broker(broker)
+
+        # Virtual broker needs no OAuth — it is ready immediately.
+        if broker == "virtual":
+            return {
+                "broker": broker,
+                "connector_profile": connector_profile,
+                "oauth_token_present": True,
+                "instruction": (
+                    "Virtual broker is ready to use. No OAuth required — "
+                    "all trading is simulated locally with zero real funds."
+                ),
+                "note": (
+                    "The virtual broker channel is always authorised. "
+                    "Create a mandate via propose_mandate_profiles, then "
+                    "start the runner via POST /live/runner/start."
+                ),
+            }
+
         return {
             "broker": broker,
             "connector_profile": connector_profile,

@@ -54,7 +54,7 @@ def _num_or_none(value: Any) -> float | None:
 TRADING_COMMON_PARAMETERS = {
     "connection": {
         "type": "string",
-        "description": "Trading connector profile id, e.g. ibkr-paper-local or robinhood-live-mcp. Defaults to the selected profile.",
+        "description": "Trading connector profile id, e.g. ibkr-paper-local, robinhood-live-mcp, or virtual-paper-trade. Defaults to the selected profile. When the user wants paper/simulated trading with zero setup, recommend virtual-paper-trade. Profiles with 'requires_mandate' (including virtual-paper-trade) are gated by mandate + kill switch.",
     },
     "host": {
         "type": "string",
@@ -89,7 +89,8 @@ class TradingConnectionsTool(BaseTool):
 
     name = "trading_connections"
     description = (
-        "List selectable trading connector profiles. Connectors come first; paper/live is a profile attribute."
+        "List selectable trading connector profiles. Connectors come first; paper/live is a profile attribute. "
+        "Includes virtual-paper-trade for zero-setup local simulated trading."
     )
     parameters = {"type": "object", "properties": {}, "required": []}
     repeatable = True
@@ -318,9 +319,13 @@ class TradingPlaceOrderTool(BaseTool):
 
     name = "trading_place_order"
     description = (
-        "Place an order through the selected trading connector profile. Paper "
-        "profiles trade a sandbox account; live profiles are gated by the user's "
-        "mandate and kill switch. side is 'buy' or 'sell'; give exactly one of "
+        "Place an order through the selected trading connector profile. "
+        "Profiles with 'requires_mandate' capability (including virtual-paper-trade) "
+        "are gated by the user's mandate and kill switch before any order reaches "
+        "the broker. If the order is blocked with 'no valid mandate', guide the user "
+        "to call propose_mandate_profiles first to create a risk control authorization, "
+        "then have them commit it through the frontend. "
+        "side is 'buy' or 'sell'; give exactly one of "
         "quantity (units) or notional (account-currency amount)."
     )
     parameters = {

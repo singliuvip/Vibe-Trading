@@ -1627,6 +1627,62 @@ def get_swarm_status(run_id: str) -> str:
 
 
 @mcp.tool
+def wait_for_swarm_result(run_id: str, wait_seconds: int = 40) -> str:
+    """Wait for a swarm run to complete, then return the final result.
+
+    Polls ``get_run_result`` every second until the run reaches a terminal
+    status (``completed`` / ``failed`` / ``cancelled``) or the wait budget
+    expires.  Use this for bounded polling by MCP clients to keep a single
+    MCP call alive instead of busy-polling ``get_run_result`` in a model loop.
+
+    The per-poll timeout is 1 second; ``wait_seconds`` is the total wall-clock
+    budget (1–45).  If the run is still running when the budget expires the
+    payload has ``ready: false``; the caller should call again later (or use
+    a fresh ``wait_for_swarm_result`` after a delay).
+
+    Args:
+        run_id: The run ID returned by run_swarm.
+        wait_seconds: Maximum seconds to wait (1–45, default 40).
+    """  # noqa: E501
+    import time
+
+    budget = max(1, min(45, wait_seconds))
+    store = _get_swarm_store()
+    deadline = time.monotonic() + budget
+    while time.monotonic() < deadline:
+        try:
+            run = store.load_run(run_id)
+        except ValueError as exc:
+            return json.dumps(
+                {"status": "error", "error": str(exc)}, ensure_ascii=False
+            )
+        if run is None:
+            return json.dumps(
+                {"status": "error", "error": f"Run {run_id} not found"},
+                ensure_ascii=False,
+            )
+        reconciled = store.reconcile_run(run, write=True)
+        if reconciled.status.value in {"completed", "failed", "cancelled"}:
+            payload = _run_to_dict(
+                reconciled, is_stale=store.is_run_stale(reconciled)
+            )
+            payload["ready"] = True
+            return json.dumps(payload, ensure_ascii=False, indent=2)
+        time.sleep(1)
+    # Budget expired — return current progress
+    try:
+        run = store.load_run(run_id)
+    except ValueError:
+        return json.dumps({"status": "running", "ready": False}, ensure_ascii=False)
+    if run is None:
+        return json.dumps({"status": "error", "ready": False}, ensure_ascii=False)
+    reconciled = store.reconcile_run(run, write=False)
+    payload = _run_to_dict(reconciled, is_stale=store.is_run_stale(reconciled))
+    payload["ready"] = False
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+@mcp.tool
 def get_run_result(run_id: str) -> str:
     """Get the final report and task summaries of a swarm run.
 
@@ -1686,6 +1742,48 @@ def list_runs(limit: int = 20) -> str:
             }
         )
     return json.dumps(items, ensure_ascii=False, indent=2)
+
+
+@mcp.tool
+def cancel_swarm_run(run_id: str) -> str:
+    """Cancel a running swarm run.
+
+    Signals cancellation to the background swarm thread. Tasks that have not
+    yet started will be skipped; in-progress tasks may take a moment to honour
+    the cancellation. The run's status transitions to ``cancelled`` once all
+    tasks complete or are skipped.
+
+    Use after spotting a ``running`` status via ``get_swarm_status`` or
+    ``list_runs`` when the result is no longer needed. A cancelled run can be
+    retried with ``retry_run(run_id)``.
+
+    Args:
+        run_id: ID of the run to cancel (from ``run_swarm`` / ``list_runs``).
+    """
+    from src.config import load_swarm_agent_config
+    from src.swarm.runtime import SwarmRuntime
+    from src.swarm.store import SwarmStore, swarm_runs_root
+
+    swarm_dir = swarm_runs_root()
+    store = SwarmStore(base_dir=swarm_dir)
+    agent_config = load_swarm_agent_config()
+    runtime = SwarmRuntime(store=store, agent_config=agent_config)
+
+    cancelled = runtime.cancel_run(run_id)
+    if not cancelled:
+        # Run not found — maybe already completed or non-existent
+        run = store.load_run(run_id)
+        if run is None:
+            return json.dumps(
+                {"status": "error", "error": f"Run {run_id} not found"},
+                ensure_ascii=False,
+            )
+        # Run exists but was not found in cancel_events — likely completed
+        return json.dumps(
+            {"status": "ok", "run_id": run_id, "info": "already completed or not running"},
+            ensure_ascii=False,
+        )
+    return json.dumps({"status": "ok", "run_id": run_id, "action": "cancelling"}, ensure_ascii=False)
 
 
 @mcp.tool

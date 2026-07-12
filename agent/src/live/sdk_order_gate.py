@@ -40,6 +40,7 @@ from src.live.enforcement import (
 from src.live.halt import halt_flag_set
 from src.live.mandate.model import MANDATE_SCHEMA_VERSION, Mandate
 from src.live.mandate.store import load_mandate
+from src.live.risk_scope import OrderRiskScope, resolve_scope
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,9 @@ def execute_live_order(
 ) -> dict[str, Any]:
     """Run the live mandate gate around a direct-SDK ``place_order``.
 
+    This is a backward-compatible wrapper that delegates to
+    :func:`execute_guarded_order` with ``scope=resolve_scope(broker, "default")``.
+
     Args:
         broker: Broker key (mandate/halt/counter/audit are keyed by this).
         connector_module: The connector's ``sdk`` module (provides
@@ -78,29 +82,83 @@ def execute_live_order(
         ``live_action`` record attached). Otherwise a refusal envelope
         ``{"status":"blocked","decision",...}``.
     """
-    broker = (broker or "").strip().lower()
+    scope = resolve_scope(broker, "default")
+    return execute_guarded_order(
+        scope=scope,
+        connector_module=connector_module,
+        config=config,
+        intent=intent,
+        place_kwargs=place_kwargs,
+        session_id=session_id,
+    )
 
-    mandate = load_mandate(broker)
+
+def execute_guarded_order(
+    *,
+    scope: OrderRiskScope,
+    connector_module: Any,
+    config: Any,
+    intent: OrderIntent,
+    place_kwargs: dict[str, Any],
+    session_id: str = "",
+) -> dict[str, Any]:
+    """Run the unified safety gate around ``place_order`` for a scope.
+
+    Same 7-step check chain as ``execute_live_order`` but using the provided
+    ``scope`` for mandate/counter/halt resolution. This is the canonical entry
+    point for both real and virtual profiles that opt into mandate gating.
+
+    Args:
+        scope: The resolved :class:`OrderRiskScope` for this order.
+        connector_module: The connector's SDK module.
+        config: The connector config object.
+        intent: Normalized :class:`OrderIntent`.
+        place_kwargs: Keyword args forwarded to ``connector_module.place_order``.
+        session_id: Originating session id, stamped onto audit events.
+
+    Returns:
+        Same shape as :func:`execute_live_order`.
+    """
+    broker = scope.broker
+
+    # Backward-compatible: real brokers (account_id="default") use the 1-arg
+    # load_mandate(broker) form; virtual accounts use the 2-arg scoped form.
+    # After T9 migration, virtual US "default" mandate may have been migrated
+    # to scoped path, so we fall back to load_mandate(broker, "default").
+    if scope.account_id == "default":
+        mandate = load_mandate(broker)
+        # After T9 migration, virtual US mandate may be at scoped path.
+        if mandate is None and broker == "virtual":
+            mandate = load_mandate(broker, "default")
+    else:
+        mandate = load_mandate(broker, scope.account_id)
     if mandate is None or mandate.schema_version != MANDATE_SCHEMA_VERSION:
-        return _deny(broker, session_id, "no valid mandate on file", ["mandate"], mandate, intent=None)
+        return _deny(broker, session_id, "no valid mandate on file", ["mandate"], mandate, intent=None, scope=scope)
 
     if _is_expired(mandate):
-        return _deny(broker, session_id, "mandate expired — re-authorize", ["mandate", "expiry"], mandate, intent=None, reauth=True)
+        return _deny(broker, session_id, "mandate expired — re-authorize", ["mandate", "expiry"], mandate, intent=None, reauth=True, scope=scope)
 
     if halt_flag_set(broker):
-        return _deny(broker, session_id, "live trading halted", ["mandate", "expiry", "halt_flag"], mandate, intent=None)
+        return _deny(broker, session_id, "live trading halted", ["mandate", "expiry", "halt_flag"], mandate, intent=None, scope=scope)
 
     normalized = _normalize_notional(intent, connector_module, config)
     if normalized is None:
         return _deny(
             broker, session_id, "quantity order notional could not be priced (fail-closed)",
-            ["mandate", "expiry", "halt_flag", "quote"], mandate, intent=intent,
+            ["mandate", "expiry", "halt_flag", "quote"], mandate, intent=intent, scope=scope,
         )
     intent = normalized
 
     positions = _safe_read(connector_module, "get_positions", config)
     balance = _safe_read(connector_module, "get_account_snapshot", config)
-    daily_count = read_daily_count(broker)
+    # Backward-compatible: real brokers use 1-arg daily count; virtual uses 2-arg.
+    # After T9 migration, fall back to scoped path for virtual US "default".
+    if scope.account_id == "default":
+        daily_count = read_daily_count(broker)
+        if daily_count == 0 and broker == "virtual":
+            daily_count = read_daily_count(broker, "default")
+    else:
+        daily_count = read_daily_count(broker, scope.account_id)
 
     breach = check_mandate(
         mandate, intent, positions, balance,
@@ -108,10 +166,10 @@ def execute_live_order(
     )
 
     if breach is None:
-        return _allow(broker, session_id, connector_module, config, intent, place_kwargs, mandate)
+        return _allow_scoped(broker, scope, session_id, connector_module, config, intent, place_kwargs, mandate)
 
     reauth = breach.kind not in (BREACH_KIND_UNIVERSE, BREACH_KIND_INSTRUMENT)
-    return _deny_breach(broker, session_id, breach, mandate, intent, reauth)
+    return _deny_breach(broker, session_id, breach, mandate, intent, reauth, scope=scope)
 
 
 # --------------------------------------------------------------------------- #
@@ -120,7 +178,17 @@ def execute_live_order(
 
 
 def _allow(broker, session_id, connector_module, config, intent, place_kwargs, mandate) -> dict[str, Any]:
-    """Execute the order; consume a count + audit only on a non-error result."""
+    """Execute the order; consume a count + audit only on a non-error result.
+
+    Backward-compatible wrapper that delegates to :func:`_allow_scoped` with
+    ``scope=resolve_scope(broker, "default")``.
+    """
+    scope = resolve_scope(broker, "default")
+    return _allow_scoped(broker, scope, session_id, connector_module, config, intent, place_kwargs, mandate)
+
+
+def _allow_scoped(broker, scope, session_id, connector_module, config, intent, place_kwargs, mandate) -> dict[str, Any]:
+    """Execute the order; consume a scoped count + audit only on a non-error result."""
     try:
         result = connector_module.place_order(config, **place_kwargs)
     except Exception as exc:  # noqa: BLE001 - a connector raise must not escape the gate
@@ -139,31 +207,42 @@ def _allow(broker, session_id, connector_module, config, intent, place_kwargs, m
             broker_request=dict(place_kwargs), broker_response=result if isinstance(result, dict) else {"raw": result},
             gate_decision={"allowed": True, "decision": _DECISION_ALLOW, "checked_limits": checked},
             error=_error_message(result),
+            scope=scope,
         )
     else:
-        increment_daily_count(broker)
+        # Backward-compatible: real brokers use 1-arg; virtual uses 2-arg.
+        # After T9 migration, virtual US "default" writes to scoped path.
+        if scope.account_id == "default":
+            if broker == "virtual":
+                increment_daily_count(broker, "default")
+            else:
+                increment_daily_count(broker)
+        else:
+            increment_daily_count(broker, scope.account_id)
         record = _audit(
             broker, session_id, kind="order_placed", outcome="accepted", mandate=mandate, intent=intent,
             broker_request=dict(place_kwargs), broker_response=result,
             gate_decision={"allowed": True, "decision": _DECISION_ALLOW, "checked_limits": checked},
+            scope=scope,
         )
     if isinstance(result, dict) and record is not None:
         result = {**result, LIVE_ACTION_RESULT_KEY: record}
     return result if isinstance(result, dict) else {"status": "error", "error": "non-dict broker result"}
 
 
-def _deny(broker, session_id, reason, checked, mandate, *, intent, reauth=False) -> dict[str, Any]:
+def _deny(broker, session_id, reason, checked, mandate, *, intent, reauth=False, scope=None) -> dict[str, Any]:
     """Audit + return a refusal for a pre-check / structural DENY."""
     record = _audit(
         broker, session_id, kind="order_rejected", outcome="blocked", mandate=mandate, intent=intent,
         broker_request=None, broker_response=None,
         gate_decision={"allowed": False, "decision": _DECISION_DENY, "checked_limits": checked},
         error=reason,
+        scope=scope,
     )
     return _refusal(broker, decision=_DECISION_DENY, reason=reason, reauth=reauth, record=record)
 
 
-def _deny_breach(broker, session_id, breach, mandate, intent, reauth) -> dict[str, Any]:
+def _deny_breach(broker, session_id, breach, mandate, intent, reauth, scope=None) -> dict[str, Any]:
     """Audit + return a refusal for a ``check_mandate`` breach."""
     decision = _DECISION_PAUSE if reauth else _DECISION_DENY
     record = _audit(
@@ -174,6 +253,7 @@ def _deny_breach(broker, session_id, breach, mandate, intent, reauth) -> dict[st
             "limit_value": breach.limit_value, "attempted_value": breach.attempted_value,
         },
         error=breach.detail or f"order breaches {breach.limit}",
+        scope=scope,
     )
     return _refusal(
         broker, decision=decision, reason=breach.detail or f"order breaches {breach.limit}",
@@ -189,6 +269,25 @@ def _refusal(broker, *, decision, reason, reauth, breach=None, record=None) -> d
         "broker": broker,
         "requires_reauthorization": reauth,
     }
+
+    # Onboarding guidance: when the user hasn't set up a mandate yet, include
+    # actionable next steps so the LLM / frontend can guide them.
+    if "no valid mandate" in reason.lower():
+        payload["onboarding"] = {
+            "action": "propose_mandate_profiles",
+            "description": (
+                "This profile requires a committed mandate (risk control authorization) "
+                "before placing orders. Use the propose_mandate_profiles tool to create "
+                "a mandate proposal, then commit it through the frontend/API."
+            ),
+            "hint": (
+                f"Call propose_mandate_profiles(broker=\"{broker}\", "
+                f"ceilings={{...}}[, account_id=\"<account_id>\"]) to get started. "
+                f"Include the account_id for per-account isolation (e.g. 'default' "
+                f"for virtual US, 'cn-default' for virtual CN)."
+            ),
+        }
+
     if record is not None:
         payload[LIVE_ACTION_RESULT_KEY] = record
     if breach is not None:
@@ -296,8 +395,9 @@ def _safe_read(connector_module: Any, fn_name: str, config: Any) -> object:
 # --------------------------------------------------------------------------- #
 
 
-def _audit(broker, session_id, *, kind, outcome, mandate, intent, broker_request, broker_response, gate_decision, error=None) -> dict | None:
+def _audit(broker, session_id, *, kind, outcome, mandate, intent, broker_request, broker_response, gate_decision, error=None, scope=None) -> dict | None:
     consent = mandate.consent if mandate is not None else None
+    scope_ref_val = f"{scope.broker}/{scope.account_id}" if scope is not None else None
     try:
         event = LiveActionEvent(
             kind=kind,  # type: ignore[arg-type]
@@ -312,6 +412,7 @@ def _audit(broker, session_id, *, kind, outcome, mandate, intent, broker_request
             broker_response=broker_response,
             gate_decision=gate_decision,
             error=error,
+            scope_ref=scope_ref_val,
         )
         try:
             return write_live_action(event, event_callback=None, trace_writer=None)

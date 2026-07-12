@@ -6,10 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **统一风控门控**：`virtual-paper-trade` 和 `virtual-paper-trade-cn` 现在通过 `execute_guarded_order()` 走与实盘相同的 7 步风控门控（Mandate + Kill Switch + 审计 + 每日计数）。
+- **作用域隔离**：US 虚拟账户 (`virtual/default/`) 和 CN 虚拟账户 (`virtual/cn-default/`) 拥有独立的 mandate、每日计数和审计跟踪。
+- **Capability 驱动路由**：`orders.place.requires_mandate` capability 控制是否启用风控门控，不影响其他 paper sandbox。
+- **账户级 Mandate 提案**：`propose_mandate_profiles` 和 `POST /mandate/commit` 支持 `account_id` 参数。
+- **首次进入引导**：无 mandate 时下单返回 `onboarding` 引导信息，引导用户调用 `propose_mandate_profiles`。
+- **旧数据兼容迁移**：旧 broker 级 `virtual/mandate.json` 自动迁移到 `virtual/default/mandate.json`。
 
 ### Changed
+- `agent/src/live/paths.py`：`broker_dir()` 支持可选 `account_id` 参数。
+- `agent/src/live/mandate/store.py`：`load_mandate()` 支持可选 `account_id` 参数并自动迁移旧路径数据。
+- `agent/src/live/daily_count.py`：`read_daily_count()`/`increment_daily_count()` 支持可选 `account_id` 参数。
+- `agent/src/trading/service.py`：`place_order()` 从 `environment == "paper"` 改为 capability 驱动路由。
+- `agent/src/api/live_routes.py`：`BrokerRuntimeCapability` 新增 `direct_trading_supported`/`direct_trading_requires_mandate` 字段；`_active_mandate_state` 支持 `account_id`。
+- `agent/src/live/audit.py`：`LiveActionEvent` 新增 `scope_ref` 字段。
+- `agent/src/tools/trading_connector_tool.py`：`trading_place_order` 描述增加 mandate 引导说明。
 
-### Fixed
+### Deprecated
+- 旧 broker 级 `virtual/mandate.json` 路径已废弃，将自动迁移到 `virtual/default/mandate.json`。
 
 ## [0.1.9] — 2026-06-01
 

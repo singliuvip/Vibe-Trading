@@ -16,6 +16,9 @@ READ_CAPABILITIES = (
     "history.read",
 )
 
+#: Capability constant for mandate-gated order placement.
+MANDATE_REQUIRED_CAPABILITY = "orders.place.requires_mandate"
+
 
 @dataclass(frozen=True)
 class TradingProfile:

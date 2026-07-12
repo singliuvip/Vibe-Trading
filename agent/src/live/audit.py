@@ -129,6 +129,8 @@ class LiveActionEvent:
         gate_decision: The enforcement gate's verdict, e.g.
             ``{"allowed": True, "checked_limits": [...]}``.
         error: Error description when ``outcome == "error"``, else ``None``.
+        scope_ref: Optional broker/account scope reference for per-account
+            audit tracing (e.g. ``"virtual/default"``).
         audit_id: Unique id (``la_<hex>``); auto-generated when omitted.
         ts: ISO-8601 UTC timestamp (ms precision); auto-generated when omitted.
     """
@@ -145,6 +147,7 @@ class LiveActionEvent:
     broker_response: dict[str, Any] | None = None
     gate_decision: dict[str, Any] | None = None
     error: str | None = None
+    scope_ref: str | None = None
     audit_id: str = field(default_factory=_new_audit_id)
     ts: str = field(default_factory=_utc_now_iso_ms)
 
@@ -175,6 +178,7 @@ class LiveActionEvent:
             "server": self.server,
             "remote_tool": self.remote_tool,
             "error": self.error,
+            "scope_ref": self.scope_ref,
         }
         return redact_payload(record)
 

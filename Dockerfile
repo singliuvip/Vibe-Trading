@@ -20,6 +20,13 @@ LABEL org.opencontainers.image.title="Vibe-Trading" \
     org.opencontainers.image.source="https://github.com/HKUDS/Vibe-Trading" \
     org.opencontainers.image.licenses="MIT"
 
+# Mirror overrides for regions with slow access to defaults.
+#   DEBIAN_MIRROR: e.g. mirrors.tuna.tsinghua.edu.cn (omit protocol/slash)
+#   PIP_INDEX_URL: e.g. https://pypi.tuna.tsinghua.edu.cn/simple
+ARG DEBIAN_MIRROR=mirrors.tuna.tsinghua.edu.cn
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_DEFAULT_TIMEOUT=120
+
 WORKDIR /app
 
 # System deps
@@ -28,7 +35,9 @@ WORKDIR /app
 #   Cairo/gdk-pixbuf) per its official Debian install list; without them the
 #   lazy `from weasyprint import HTML` in reporter.py fails and PDF rendering
 #   silently downgrades to HTML-only. fonts-dejavu-core gives non-blank PDFs.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i "s|deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null; \
+    sed -i "s|deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list 2>/dev/null; \
+    apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpango-1.0-0 \
     libpangoft2-1.0-0 \
@@ -41,7 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Python deps (install before copying code for layer caching)
 COPY agent/requirements.txt agent/requirements.txt
-RUN pip install --no-cache-dir -r agent/requirements.txt
+RUN pip install --no-cache-dir --index-url $PIP_INDEX_URL --default-timeout=$PIP_DEFAULT_TIMEOUT -r agent/requirements.txt
 
 # Copy project
 COPY pyproject.toml LICENSE README.md ./
@@ -51,7 +60,7 @@ COPY agent/ agent/
 COPY --from=frontend-build /app/frontend/dist frontend/dist
 
 # Install CLI entrypoint
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir --index-url $PIP_INDEX_URL --default-timeout=$PIP_DEFAULT_TIMEOUT -e .
 
 # Runtime should not run as root. Keep writable app data directories owned by
 # the service user so named Docker volumes inherit usable permissions.

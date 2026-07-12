@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # wildcard ``enabled_tools`` (which would re-admit every WRITE/UNKNOWN tool) is
 # rejected at config-load time unless a broker-specific read-only OAuth probe is
 # explicitly documented below.
-LIVE_BROKER_SERVER_KEYS: frozenset[str] = frozenset({"robinhood", "ibkr"})
+LIVE_BROKER_SERVER_KEYS: frozenset[str] = frozenset({"robinhood", "ibkr", "virtual"})
 
 # URL host suffix -> canonical live-broker key. Detection by host prevents an
 # aliased config key from bypassing the wildcard rejection / classification gate.

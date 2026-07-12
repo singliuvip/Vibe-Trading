@@ -120,14 +120,14 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
-def _proposals_dir(broker: str) -> Path:
+def _proposals_dir(broker: str, account_id: str | None = None) -> Path:
     """Return the per-broker pending-proposals directory."""
-    return broker_dir(broker) / _PROPOSALS_DIRNAME
+    return broker_dir(broker, account_id) / _PROPOSALS_DIRNAME
 
 
-def _consent_dir(broker: str) -> Path:
+def _consent_dir(broker: str, account_id: str | None = None) -> Path:
     """Return the per-broker consent-records directory."""
-    return broker_dir(broker) / _CONSENT_DIRNAME
+    return broker_dir(broker, account_id) / _CONSENT_DIRNAME
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -152,11 +152,11 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def _proposal_path(broker: str, proposal_id: str) -> Path:
+def _proposal_path(broker: str, proposal_id: str, account_id: str | None = None) -> Path:
     """Return the contained proposal path for a valid opaque proposal id."""
     if not _PROPOSAL_ID_RE.fullmatch(proposal_id):
         raise ValueError("proposal_id must be a bare mp_<32 hex> identifier")
-    base = _proposals_dir(broker).resolve()
+    base = _proposals_dir(broker, account_id).resolve()
     path = (base / f"{proposal_id}.json").resolve()
     try:
         path.relative_to(base)
@@ -191,17 +191,19 @@ def save_proposal(proposal: Mapping[str, Any]) -> None:
     proposal_id = str(proposal.get("proposal_id") or "").strip()
     if not proposal_id:
         raise ValueError("proposal must carry a proposal_id")
-    broker = str((proposal.get("account") or {}).get("broker") or "").strip()
+    account = proposal.get("account") or {}
+    broker = str(account.get("broker") or "").strip()
     if not broker:
         raise ValueError("proposal must carry account.broker")
-    path = _proposal_path(broker, proposal_id)
+    account_id = str(account.get("account_id") or "").strip() or None
+    path = _proposal_path(broker, proposal_id, account_id=account_id)
     _atomic_write_json(path, dict(proposal))
 
 
-def _load_proposal(broker: str, proposal_id: str) -> dict[str, Any] | None:
+def _load_proposal(broker: str, proposal_id: str, account_id: str | None = None) -> dict[str, Any] | None:
     """Load a persisted proposal, or ``None`` when absent/unreadable."""
     try:
-        path = _proposal_path(broker, proposal_id)
+        path = _proposal_path(broker, proposal_id, account_id=account_id)
     except ValueError as exc:
         logger.warning("proposal %s for %s is invalid: %s", proposal_id, broker, exc)
         return None
@@ -215,10 +217,10 @@ def _load_proposal(broker: str, proposal_id: str) -> dict[str, Any] | None:
     return raw if isinstance(raw, dict) else None
 
 
-def _invalidate_proposal(broker: str, proposal_id: str) -> None:
+def _invalidate_proposal(broker: str, proposal_id: str, account_id: str | None = None) -> None:
     """Delete a proposal so it can never be committed twice (idempotency)."""
     try:
-        _proposal_path(broker, proposal_id).unlink()
+        _proposal_path(broker, proposal_id, account_id=account_id).unlink()
     except (FileNotFoundError, ValueError):
         pass
 
@@ -316,6 +318,7 @@ def commit_mandate(
     consent_ack: bool,
     *,
     broker: str,
+    account_id: str | None = None,
     account_ref: str = "",
     session_id: str | None = None,
     ceilings_ref: Mapping[str, Any] | None = None,
@@ -367,11 +370,18 @@ def commit_mandate(
     if consent_ack is not True:
         raise CommitError("commit requires an explicit consent_ack=true")
 
-    proposal = _load_proposal(broker, proposal_id)
+    proposal = _load_proposal(broker, proposal_id, account_id=account_id)
+    # For backward compatibility: also try without account_id if not found.
+    if proposal is None and account_id is not None:
+        proposal = _load_proposal(broker, proposal_id, account_id=None)
     if proposal is None:
         raise CommitError(f"proposal {proposal_id!r} is not live (already committed, expired, or unknown)")
 
     resolved = _resolve_profile(proposal, ordinal, adjustments)
+
+    # Determine account scope: the param wins, otherwise read from proposal.
+    proposal_account = proposal.get("account") or {}
+    scope_account_id = account_id or str(proposal_account.get("account_id") or "").strip() or None
 
     ceilings = dict(ceilings_ref) if ceilings_ref is not None else dict(proposal.get("ceilings") or {})
     if ceilings and not _profile_fits_ceilings(resolved, ceilings):
@@ -410,10 +420,12 @@ def commit_mandate(
             "consent_token_sha256": consent_token_sha256,
             "broker": broker,
             "account_ref": account_ref,
+            "account_id": scope_account_id or "default",
             "expires_at": expires_iso,
         },
     }
-    _atomic_write_json(broker_dir(broker) / _MANDATE_FILENAME, mandate_doc)
+    mandate_dir = broker_dir(broker, scope_account_id) if scope_account_id else broker_dir(broker)
+    _atomic_write_json(mandate_dir / _MANDATE_FILENAME, mandate_doc)
 
     consent_record = {
         "consent_record_id": consent_record_id,
@@ -425,16 +437,17 @@ def commit_mandate(
         "session_id": session_id,
         "broker": broker,
         "account_ref": account_ref,
+        "account_id": scope_account_id or "default",
         "resolved_profile": resolved,
         "flatten_on_halt": do_flatten_on_halt,
         "ceilings_ref": proposal.get("ceilings_ref"),
         "created_at": created_iso,
         "expires_at": expires_iso,
     }
-    _atomic_write_json(_consent_dir(broker) / f"{consent_record_id}.json", consent_record)
+    _atomic_write_json(_consent_dir(broker, scope_account_id) / f"{consent_record_id}.json", consent_record)
 
     # One-shot: the proposal can never be committed again.
-    _invalidate_proposal(broker, proposal_id)
+    _invalidate_proposal(broker, proposal_id, account_id=scope_account_id)
 
     logger.warning(
         "live mandate committed (broker=%s, mandate_id=%s, consent=%s, ordinal=%s)",

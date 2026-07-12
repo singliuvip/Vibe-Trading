@@ -57,7 +57,7 @@ class ProposeMandateProfilesTool(BaseTool):
         "properties": {
             "broker": {
                 "type": "string",
-                "description": "Broker key, e.g. 'robinhood'.",
+                "description": "Broker key, e.g. 'robinhood' or 'virtual' for local simulated trading.",
             },
             "intent": {
                 "type": "string",
@@ -94,6 +94,15 @@ class ProposeMandateProfilesTool(BaseTool):
                     "user's choice is carried through to commit (SPEC §7.5 #6)."
                 ),
             },
+            "account_id": {
+                "type": "string",
+                "description": (
+                    "Optional account id within the broker. For virtual brokers "
+                    "this is the profile's account_id (e.g. 'default' for US, "
+                    "'cn-default' for A-share). When omitted, the proposal is "
+                    "stored at broker level (backward-compatible)."
+                ),
+            },
         },
         "required": ["broker", "ceilings"],
     }
@@ -125,6 +134,12 @@ class ProposeMandateProfilesTool(BaseTool):
         session_id = kwargs.get("session_id")
         reauth_for = kwargs.get("reauth_for") if isinstance(kwargs.get("reauth_for"), dict) else None
         flatten_on_halt = bool(kwargs.get("flatten_on_halt", False))
+        # account_id is optional: when absent (None/"") the proposal and mandate
+        # are stored at broker level (backward-compatible). When explicitly set
+        # (e.g. "default" for virtual US, "cn-default" for virtual CN) the
+        # proposal and mandate are scoped to that account directory.
+        raw_account_id = kwargs.get("account_id")
+        account_id: str | None = str(raw_account_id).strip() if raw_account_id else None
 
         try:
             profiles = self._synthesize_profiles(ceilings, reauth_for, flatten_on_halt)
@@ -135,16 +150,20 @@ class ProposeMandateProfilesTool(BaseTool):
             )
 
         proposal_id = f"mp_{uuid.uuid4().hex}"
+        account_info: dict[str, Any] = {
+            "broker": broker,
+            "type": self._account_type(ceilings),
+            "funded_by": "user",
+        }
+        if account_id is not None:
+            account_info["account_id"] = account_id
+
         payload: dict[str, Any] = {
             "type": "mandate.proposal",
             "proposal_id": proposal_id,
             "session_id": session_id,
             "intent_normalized": intent,
-            "account": {
-                "broker": broker,
-                "type": self._account_type(ceilings),
-                "funded_by": "user",
-            },
+            "account": account_info,
             "ceilings_ref": str(ceilings.get("ceilings_ref") or f"caps_{uuid.uuid4().hex}"),
             # The full snapshot is stored on the record so commit re-validates
             # the resolved profile against exactly what the user saw.

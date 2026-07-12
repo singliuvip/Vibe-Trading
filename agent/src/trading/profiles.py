@@ -17,6 +17,7 @@ from src.trading.connectors.robinhood.profiles import ROBINHOOD_PROFILES
 from src.trading.connectors.shoonya.profiles import SHOONYA_PROFILES
 from src.trading.connectors.tiger.profiles import TIGER_PROFILES
 from src.trading.connectors.trading212.profiles import TRADING212_PROFILES
+from src.trading.connectors.virtual.profiles import VIRTUAL_PROFILES
 from src.trading.types import TradingProfile
 
 CONFIG_FILENAME = "trading-connections.json"
@@ -34,6 +35,7 @@ BUILTIN_PROFILES: tuple[TradingProfile, ...] = (
     *DHAN_PROFILES,
     *SHOONYA_PROFILES,
     *TRADING212_PROFILES,
+    *VIRTUAL_PROFILES,
 )
 
 
@@ -67,7 +69,18 @@ def profile_by_id(profile_id: str | None = None) -> TradingProfile:
 
 
 def load_selected_profile_id() -> str:
-    """Load the selected trading profile id."""
+    """Load the selected trading profile id.
+
+    Validates that the saved profile exists in ``BUILTIN_PROFILES``.
+    If the saved profile is unknown (e.g. after a connector removal or manual
+    config edit), falls back to ``virtual-paper-trade`` with a warning rather
+    than returning an invalid id that would cause downstream errors.
+    """
+    import logging as _logging
+
+    _logger = _logging.getLogger(__name__)
+    FALLBACK_ID = "virtual-paper-trade"
+
     path = config_path()
     if not path.exists():
         return DEFAULT_PROFILE_ID
@@ -76,7 +89,22 @@ def load_selected_profile_id() -> str:
     except (OSError, json.JSONDecodeError):
         return DEFAULT_PROFILE_ID
     selected = str(payload.get("selected_profile") or DEFAULT_PROFILE_ID).strip().lower()
-    return selected or DEFAULT_PROFILE_ID
+    if not selected:
+        return DEFAULT_PROFILE_ID
+
+    # Validate that the saved profile actually exists.
+    profile_ids = {p.id for p in BUILTIN_PROFILES}
+    if selected in profile_ids:
+        return selected
+
+    _logger.warning(
+        "saved trading profile %r not found in BUILTIN_PROFILES; "
+        "falling back to %r. Fix by running: vibe-trading connector use %s",
+        selected,
+        FALLBACK_ID,
+        FALLBACK_ID,
+    )
+    return FALLBACK_ID
 
 
 def save_selected_profile_id(profile_id: str) -> Path:

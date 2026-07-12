@@ -70,7 +70,13 @@ def swarm_runs_root() -> Path:
     where the two anchors resolved differently silently put every worker
     run_dir outside the allow-list (P03-A). Deriving it here once keeps
     the store location and the allow-list from drifting again.
+
+    Override with the ``SWARM_RUNS_ROOT`` env var for production deployments
+    that want swarm state on a dedicated volume (e.g. ``/data/swarm/runs``).
     """
+    override = os.environ.get("SWARM_RUNS_ROOT")
+    if override:
+        return Path(override).resolve()
     return Path(__file__).resolve().parents[2] / ".swarm" / "runs"
 
 

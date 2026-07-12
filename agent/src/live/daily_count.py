@@ -16,7 +16,10 @@ from src.live.paths import broker_dir
 _COUNTER_FILENAME = "trade_counter.json"
 
 
-def _counter_path(broker: str):
+def _counter_path(broker: str, account_id: str | None = None):
+    if account_id:
+        from src.live.risk_scope import resolve_scope
+        return resolve_scope(broker, account_id).counter_path
     return broker_dir(broker) / _COUNTER_FILENAME
 
 
@@ -25,9 +28,9 @@ def _utc_today() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
-def read_daily_count(broker: str) -> int:
+def read_daily_count(broker: str, account_id: str | None = None) -> int:
     """Return today's order count for ``broker`` (UTC rollover; 0 on any miss)."""
-    path = _counter_path(broker)
+    path = _counter_path(broker, account_id)
     if not path.is_file():
         return 0
     try:
@@ -42,11 +45,11 @@ def read_daily_count(broker: str) -> int:
         return 0
 
 
-def increment_daily_count(broker: str) -> int:
+def increment_daily_count(broker: str, account_id: str | None = None) -> int:
     """Persist ``broker``'s incremented count for today (atomic). Returns new count."""
     today = _utc_today()
-    count = read_daily_count(broker) + 1
-    path = _counter_path(broker)
+    count = read_daily_count(broker, account_id) + 1
+    path = _counter_path(broker, account_id)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(json.dumps({"date": today, "count": count}, ensure_ascii=False), encoding="utf-8")

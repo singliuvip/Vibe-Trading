@@ -23,6 +23,7 @@ _SDK_CONNECTOR_MODULES = {
     "dhan": "src.trading.connectors.dhan.sdk",
     "shoonya": "src.trading.connectors.shoonya.sdk",
     "trading212": "src.trading.connectors.trading212.sdk",
+    "virtual": "src.trading.connectors.virtual.sdk",
 }
 
 
@@ -208,6 +209,7 @@ _CONNECTOR_INSTRUMENT = {
     "longbridge": ("equity", None),
     "futu": ("equity", None),
     "trading212": ("equity", None),
+    "virtual": ("equity", None),  # inferred from symbol market tag
 }
 
 
@@ -233,7 +235,7 @@ def _order_classification(connector: str, symbol: str):
         return instrument, AssetClass.HK_EQUITY
     if token.startswith("US.") or token.endswith(".US"):
         return instrument, AssetClass.US_EQUITY
-    if token.startswith(("CN.", "SH.", "SZ.")) or token.endswith((".SH", ".SS", ".SZ")):
+    if token.startswith(("CN.", "SH.", "SZ.")) or token.endswith((".SH", ".SS", ".SZ", ".BJ", ".CN")):
         return instrument, AssetClass.CN_EQUITY
     return instrument, None
 
@@ -278,11 +280,17 @@ def place_order(
     }
 
     if profile.environment == "paper":
-        return _with_profile(profile, module.place_order(config, **place_kwargs))
+        # Check if this profile requires mandate-gated order placement.
+        from src.trading.types import MANDATE_REQUIRED_CAPABILITY
 
-    # Live: pre-trade mandate gate.
+        if MANDATE_REQUIRED_CAPABILITY not in profile.capabilities:
+            # Paper sandbox profiles without mandate requirement: direct SDK call.
+            return _with_profile(profile, module.place_order(config, **place_kwargs))
+
+    # Mandate-gated: pre-trade safety gate (live + virtual with requires_mandate).
     from src.live.enforcement import OrderIntent
-    from src.live.sdk_order_gate import execute_live_order
+    from src.live.risk_scope import resolve_scope
+    from src.live.sdk_order_gate import execute_guarded_order
 
     instrument_type, asset_class = _order_classification(profile.connector, symbol)
     intent = OrderIntent(
@@ -293,8 +301,12 @@ def place_order(
         instrument_type=instrument_type,
         asset_class=asset_class,
     )
-    result = execute_live_order(
-        broker=profile.connector,
+
+    # Determine account_id from profile config for per-account scope isolation.
+    account_id = str(profile.config.get("account_id", "default") or "default")
+    scope = resolve_scope(profile.connector, account_id)
+    result = execute_guarded_order(
+        scope=scope,
         connector_module=module,
         config=config,
         intent=intent,
@@ -327,7 +339,10 @@ def cancel_order(
     module = _sdk_module(profile.connector)
     config = module.build_config(profile.config, overrides)
     result = module.cancel_order(config, order_id, symbol=symbol)
-    if profile.environment == "live":
+    # Cancel is risk-reducing; audit all mandate-gated profiles (virtual + live).
+    from src.trading.types import MANDATE_REQUIRED_CAPABILITY
+
+    if MANDATE_REQUIRED_CAPABILITY in profile.capabilities:
         _audit_live_cancel(profile, order_id, symbol, result, session_id)
     return _with_profile(profile, result)
 
@@ -362,6 +377,14 @@ def _audit_live_cancel(profile, order_id, symbol, result, session_id) -> None:
 
 def profile_supports_live_runner(profile: TradingProfile) -> bool:
     """Return whether a profile can run the managed live runner."""
+    # Virtual broker: paper + broker_sdk + runner capability.
+    if profile.connector == "virtual":
+        return (
+            profile.environment == "paper"
+            and profile.transport == "broker_sdk"
+            and RUNNER_CAPABILITY in profile.capabilities
+            and not profile.readonly
+        )
     return (
         profile.environment == "live"
         and profile.transport == "remote_mcp"
@@ -390,6 +413,11 @@ def connector_profile_id_for_broker(broker: str) -> str:
     key = str(broker or "").strip().lower()
     if not key:
         raise ValueError("broker must not be blank")
+
+    # Check for a live-runner profile first (virtual or real).
+    runner_profile = live_runner_profile_for_broker(key)
+    if runner_profile is not None:
+        return runner_profile.id
 
     candidates = [profile for profile in list_profiles() if profile.connector == key and profile.environment == "live"]
     for profile in candidates:

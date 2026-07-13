@@ -2993,9 +2993,8 @@ def cmd_channels_login(channel_name: str, *, force: bool = False) -> int:
         console.print("[dim]Configure channels.websocket in ~/.vibe-trading/agent.json, then run `vibe-trading channels start`.[/dim]")
         return EXIT_SUCCESS
     if not section:
-        console.print(f"[red]No config found for channel '{channel_name}'.[/red]")
-        console.print("[dim]Add it under channels.<name> in ~/.vibe-trading/agent.json, then retry.[/dim]")
-        return EXIT_USAGE_ERROR
+        # QR-code login channels (feishu) can bootstrap from scratch
+        section = {"enabled": True}
     section["enabled"] = True
     manager = ChannelManager({channel_name: section}, MessageBus())
     adapter = manager.get_channel(channel_name)

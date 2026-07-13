@@ -2030,6 +2030,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Vibe-Trading MCP Server")
     parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio", help="MCP transport (default: stdio)")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind address for SSE transport (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8900, help="SSE port (only used with --transport sse)")
     args = parser.parse_args()
     _include_shell_tools = True if args.transport == "stdio" else _env_shell_tools_enabled()
@@ -2037,7 +2038,7 @@ def main():
     _get_registry()  # pre-warm: avoids deadlock when first tools/call lazy-inits inside FastMCP worker thread
 
     if args.transport == "sse":
-        mcp.run(transport="sse", port=args.port)
+        mcp.run(transport="sse", host=args.host, port=args.port)
     else:
         mcp.run()
 

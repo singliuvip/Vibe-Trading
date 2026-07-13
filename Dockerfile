@@ -60,7 +60,7 @@ COPY agent/ agent/
 COPY --from=frontend-build /app/frontend/dist frontend/dist
 
 # Install CLI entrypoint
-RUN pip install --no-cache-dir --index-url $PIP_INDEX_URL --default-timeout=$PIP_DEFAULT_TIMEOUT -e .
+RUN pip install --no-cache-dir --index-url $PIP_INDEX_URL --default-timeout=$PIP_DEFAULT_TIMEOUT -e ".[feishu]"
 
 # Runtime should not run as root. Keep writable app data directories owned by
 # the service user so named Docker volumes inherit usable permissions.

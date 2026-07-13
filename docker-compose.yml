@@ -10,6 +10,7 @@ services:
         PIP_DEFAULT_TIMEOUT: ${PIP_DEFAULT_TIMEOUT:-120}
     ports:
       - "127.0.0.1:8899:8899"
+      - "8765:8765"
     env_file:
       - agent/.env
     environment:
@@ -23,6 +24,17 @@ services:
       # Maps host.docker.internal -> host gateway (needed on Linux; harmless on Docker Desktop).
       # Requires Docker Engine >= 20.10 / Compose v2 (host-gateway support).
       - "host.docker.internal:host-gateway"
+    init: true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket, urllib.request; urllib.request.urlopen('http://127.0.0.1:8899/health', timeout=3).close(); socket.create_connection(('127.0.0.1', 8765), timeout=3).close()"
+      interval: 30s
+      timeout: 8s
+      start_period: 30s
+      retries: 3
     volumes:
       - vibe-runs:/app/agent/runs
       - vibe-sessions:/app/agent/sessions
@@ -34,6 +46,13 @@ services:
       - vibe-swarm-runs:/app/agent/.swarm/runs
       - vibe-uploads:/app/agent/uploads
     restart: unless-stopped
+    # 同时启动 MCP SSE（后台）和 API 服务（前台 exec）
+    command:
+      - sh
+      - -c
+      - >
+        vibe-trading-mcp --transport sse --host 0.0.0.0 --port 8765 &
+        exec vibe-trading serve --host 0.0.0.0 --port 8899
 
   frontend:
     image: node:20

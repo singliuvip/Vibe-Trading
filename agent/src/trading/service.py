@@ -28,10 +28,18 @@ _SDK_CONNECTOR_MODULES = {
 
 
 def _sdk_module(connector: str):
-    """Import the SDK connector module for a ``broker_sdk`` connector key."""
+    """Import the SDK connector module for a ``broker_sdk`` connector key.
+
+    Queries the connector registry first; falls back to the legacy
+    ``_SDK_CONNECTOR_MODULES`` dict for backward compatibility.
+    """
     import importlib
 
-    path = _SDK_CONNECTOR_MODULES.get(connector)
+    from src.trading.connectors.registry import sdk_module_path
+
+    path = sdk_module_path(connector)
+    if path is None:
+        path = _SDK_CONNECTOR_MODULES.get(connector)
     if path is None:
         raise ValueError(f"no SDK connector module for '{connector}'")
     return importlib.import_module(path)
@@ -224,8 +232,14 @@ def _order_classification(connector: str, symbol: str):
     non-US class, so the unknown case is fail-safe.
     """
     from src.live.mandate.model import AssetClass, InstrumentType
+    from src.trading.connectors.registry import connector_instrument
 
-    instrument_name, asset_name = _CONNECTOR_INSTRUMENT.get(connector, ("equity", None))
+    instrument_name, asset_name = connector_instrument(connector)
+    # Fallback: if registry returned default and legacy has a better answer
+    if instrument_name == "equity" and asset_name is None:
+        leg = _CONNECTOR_INSTRUMENT.get(connector)
+        if leg is not None:
+            instrument_name, asset_name = leg
     instrument = InstrumentType(instrument_name)
     if asset_name is not None:
         return instrument, AssetClass(asset_name)
@@ -376,15 +390,19 @@ def _audit_live_cancel(profile, order_id, symbol, result, session_id) -> None:
 
 
 def profile_supports_live_runner(profile: TradingProfile) -> bool:
-    """Return whether a profile can run the managed live runner."""
-    # Virtual broker: paper + broker_sdk + runner capability.
-    if profile.connector == "virtual":
-        return (
-            profile.environment == "paper"
-            and profile.transport == "broker_sdk"
-            and RUNNER_CAPABILITY in profile.capabilities
-            and not profile.readonly
-        )
+    """Return whether a profile can run the managed live runner.
+
+    Queries the connector registry first; falls back to the legacy inline
+    logic for connectors not yet migrated to plugins.
+    """
+    from src.trading.connectors.registry import connector_supports_live_runner
+
+    # Registry check first (works for virtual and any future plugin brokers)
+    if connector_supports_live_runner(profile):
+        return True
+
+    # Legacy fallback for connectors not yet in the registry's live-runner support
+    # (virtual and other paper+broker_sdk connectors are handled by registry)
     return (
         profile.environment == "live"
         and profile.transport == "remote_mcp"

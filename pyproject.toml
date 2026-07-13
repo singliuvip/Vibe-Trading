@@ -70,6 +70,9 @@ Issues = "https://github.com/HKUDS/Vibe-Trading/issues"
 vibe-trading = "cli:main"
 vibe-trading-mcp = "mcp_server:main"
 
+[project.entry-points."vibe_trading.connectors"]
+virtual = "src.trading.connectors.virtual.plugin:register"
+
 [tool.setuptools]
 package-dir = {"" = "agent"}
 py-modules = ["api_server", "mcp_server"]

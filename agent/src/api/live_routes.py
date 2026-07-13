@@ -325,9 +325,13 @@ def _known_live_brokers() -> List[str]:
 def _oauth_token_present(broker: str) -> bool:
     """Return whether an OAuth token cache exists for a broker (C2 auth state).
 
-    Virtual broker is always considered authorized (no OAuth needed).
+    Brokers that declare ``requires_oauth=False`` in their runtime declaration
+    (e.g. virtual) are always considered authorized.
     """
-    if broker == "virtual":
+    from src.trading.connectors.registry import connector_runtime_declaration
+
+    runtime = connector_runtime_declaration(broker)
+    if runtime is not None and not runtime.requires_oauth:
         return True
     try:
         from src.live.paths import broker_dir
@@ -339,11 +343,29 @@ def _oauth_token_present(broker: str) -> bool:
         return False
 
 
+def _is_local_broker(broker: str) -> bool:
+    """Return whether *broker* is a local (no-OAuth) connector.
+
+    Local brokers (e.g. virtual) use account-scoped mandate paths and
+    are always ready without authentication.  Delegates to the connector
+    registry's runtime declaration.
+    """
+    try:
+        from src.trading.connectors.registry import connector_runtime_declaration
+
+        runtime = connector_runtime_declaration(broker)
+        if runtime is not None:
+            return not runtime.requires_oauth
+    except Exception:
+        pass
+    return False
+
+
 def _active_mandate_state(broker: str, account_id: str | None = None) -> Optional[ActiveMandateState]:
     """Build the active-mandate snapshot for a broker, or ``None`` when absent.
 
     When ``account_id`` is provided, loads from the scoped path
-    (e.g. ``virtual/default/mandate.json``). For the virtual broker without an
+    (e.g. ``virtual/default/mandate.json``). For local brokers without an
     explicit ``account_id``, tries ``"default"`` first before falling back
     to the broker-level path for backward compatibility.
     """
@@ -351,8 +373,9 @@ def _active_mandate_state(broker: str, account_id: str | None = None) -> Optiona
 
     if account_id is not None:
         mandate = load_mandate(broker, account_id=account_id)
-    elif broker == "virtual":
-        # Virtual broker: try scoped path first, fall back to legacy broker-level path.
+    elif _is_local_broker(broker):
+        # Local broker (no OAuth, e.g. virtual): try scoped path first,
+        # fall back to legacy broker-level path for backward compatibility.
         mandate = load_mandate(broker, account_id="default")
         if mandate is None:
             mandate = load_mandate(broker)
@@ -400,32 +423,37 @@ def _active_mandate_state(broker: str, account_id: str | None = None) -> Optiona
 def _broker_runtime_capability(broker: str) -> Optional[BrokerRuntimeCapability]:
     """Return the runtime capability snapshot for *broker*.
 
-    Virtual broker is always direct-trading-ready (paper, no OAuth). Real
-    brokers require OAuth and mandate for all operations.
+    Capabilities are derived from the connector registry's runtime declaration
+    and the resolved trading profile.  No broker-specific hard-coding.
     """
     try:
+        from src.trading.connectors.registry import connector_runtime_declaration
         from src.trading.service import (
             connector_profile_id_for_broker,
             profile_supports_live_runner,
         )
         from src.trading.profiles import profile_by_id
-
-        profile_id = connector_profile_id_for_broker(broker)
-        profile = profile_by_id(profile_id)
-        is_virtual = broker == "virtual"
         from src.trading.types import MANDATE_REQUIRED_CAPABILITY
 
+        runtime = connector_runtime_declaration(broker)
+        profile_id = connector_profile_id_for_broker(broker)
+        profile = profile_by_id(profile_id)
+
         requires_mandate = MANDATE_REQUIRED_CAPABILITY in profile.capabilities
-        direct_ready = is_virtual and profile.environment == "paper"
+        direct_supported = bool(runtime and runtime.direct_trading_supported)
+        direct_ready = bool(runtime and direct_supported and not requires_mandate)
+
         return BrokerRuntimeCapability(
             profile_id=profile.id,
             environment=profile.environment,
-            direct_trading_ready=direct_ready and not requires_mandate,
-            direct_trading_supported=direct_ready,
-            direct_trading_requires_mandate=requires_mandate,
-            requires_oauth=not is_virtual,
+            direct_trading_ready=direct_ready,
+            direct_trading_supported=direct_supported,
+            direct_trading_requires_mandate=(
+                runtime.direct_trading_requires_mandate if runtime else True
+            ),
+            requires_oauth=runtime.requires_oauth if runtime else True,
             runner_supported=profile_supports_live_runner(profile),
-            runner_requires_mandate=True,
+            runner_requires_mandate=runtime.runner_requires_mandate if runtime else True,
         )
     except Exception:
         logger.debug("runtime capability lookup failed for %s", broker, exc_info=True)
@@ -497,65 +525,27 @@ def _build_live_runner(broker: str) -> Any:
             event_callback=lambda etype, record: svc.event_bus.emit(session_id, etype, record),
         )
 
-    # ── Virtual broker (broker_sdk) ──────────────────────────────────────
-    if broker == "virtual":
-        from src.trading import service as trading_service
+    # ── Plugin-provided LiveRunner factory ───────────────────────────────
+    from src.trading.connectors.registry import live_runner_factory as _get_live_runner_factory
 
-        profile_id = connector_profile_id_for_broker("virtual")
+    plugin_factory = _get_live_runner_factory(broker)
+    if plugin_factory is not None:
+        from src.trading.connectors.contract import LiveRunnerFactoryContext
+        from src.trading.profiles import profile_by_id
 
-        def _virtual_read_positions() -> Dict[str, Any]:
-            return trading_service.get_positions(profile_id)
+        profile_id = connector_profile_id_for_broker(broker)
+        profile = profile_by_id(profile_id)
 
-        def _virtual_read_balance() -> Dict[str, Any]:
-            return trading_service.get_account(profile_id)
-
-        def _virtual_read_open_orders() -> Dict[str, Any]:
-            return trading_service.get_open_orders(profile_id, include_executions=True)
-
-        def _virtual_submit(order: Dict[str, Any]) -> Dict[str, Any]:
-            if order.get("action") == "cancel":
-                return trading_service.cancel_order(
-                    order_id=order.get("order_id", ""),
-                    profile_id=profile_id,
-                    symbol=order.get("symbol"),
-                    session_id=session_id,
-                )
-            return trading_service.place_order(
-                symbol=order.get("symbol", ""),
-                profile_id=profile_id,
-                side=order.get("side", ""),
-                quantity=order.get("quantity"),
-                notional=order.get("notional"),
-                order_type=order.get("order_type", "market"),
-                limit_price=order.get("limit_price"),
-                time_in_force=order.get("time_in_force", "day"),
-                session_id=session_id,
-            )
-
-        runner_holder: Dict[str, Any] = {}
-
-        async def _virtual_on_fire(_job: Any) -> None:
-            runner = runner_holder.get("runner")
-            if runner is not None:
-                await runner.run_once()
-
-        scheduler = Scheduler(_virtual_on_fire)
-
-        runner = LiveRunner(
-            broker,
-            agent_caller=_agent_caller,
-            reconcile_fn=reconcile,
-            read_positions=_virtual_read_positions,
-            read_balance=_virtual_read_balance,
-            read_open_orders=_virtual_read_open_orders,
-            submit_fn=_virtual_submit,
-            write_audit_fn=_audit_with_bus,
-            scheduler=scheduler,
-            triggers=[Trigger.interval(interval_ms=60000)],
+        ctx = LiveRunnerFactoryContext(
+            broker=broker,
+            profile=profile,
             session_id=session_id,
+            session_service=svc,
+            agent_caller=_agent_caller,
+            write_audit_fn=_audit_with_bus,
+            reconcile_fn=reconcile,
         )
-        runner_holder["runner"] = runner
-        return runner
+        return plugin_factory(ctx)
 
     # ── Remote MCP brokers (e.g. Robinhood) ─────────────────────────────
     def _tool(operation: str) -> str:
@@ -770,23 +760,6 @@ def register_live_routes(
         from src.trading.service import connector_profile_id_for_broker
 
         connector_profile = connector_profile_id_for_broker(broker)
-
-        # Virtual broker needs no OAuth — it is ready immediately.
-        if broker == "virtual":
-            return {
-                "broker": broker,
-                "connector_profile": connector_profile,
-                "oauth_token_present": True,
-                "instruction": (
-                    "Virtual broker is ready to use. No OAuth required — "
-                    "all trading is simulated locally with zero real funds."
-                ),
-                "note": (
-                    "The virtual broker channel is always authorised. "
-                    "Create a mandate via propose_mandate_profiles, then "
-                    "start the runner via POST /live/runner/start."
-                ),
-            }
 
         return {
             "broker": broker,

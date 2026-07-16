@@ -1,8 +1,9 @@
-"""Tushare featured data provider: cyq_perf / cyq_chips / limit_list / ths_hot /
-moneyflow / top_list / margin_detail.
+"""Tushare featured data provider (19 endpoints).
 
-Wraps ``ts.pro_api()`` for chip distribution, limit-up/down boards, THS
-hot-rank, fund flow, dragon-tiger board, and margin trading endpoints.
+Wraps ``ts.pro_api()`` for: cyq_perf, cyq_chips, limit_list, ths_hot,
+moneyflow, top_list, margin_detail, ths_index, ths_member, share_float,
+pledge_stat, repurchase, holdertrade, stock_st, hsgt_stocks, stk_surv,
+broker_recommend, cn_macro (gdp/cpi/ppi/shibor), forecast.
 Requires the corresponding Tushare privileges.
 No disk cache is written — data is always fetched live from Tushare.
 """
@@ -25,16 +26,18 @@ _VALID_THS_HOT_MARKETS = frozenset({"A", "HK", ""})
 
 
 class TushareFeaturedProvider:
-    """Provider for Tushare featured data endpoints.
+    """Provider for Tushare featured data (19 endpoints).
 
-    Supports seven endpoints:
-    - ``cyq_perf``: Daily chip-distribution performance (winner rate).
-    - ``cyq_chips``: Daily chip-distribution price/volume buckets.
-    - ``limit_list_d``: Limit-up / limit-down / broken-board list.
-    - ``ths_hot``: THS (同花顺) hot-rank list (stocks / concepts / ETFs).
-    - ``moneyflow``: Per-stock capital flow (大/中/小/超大单).
-    - ``top_list``: Dragon-tiger board (龙虎榜) daily detail.
-    - ``margin_detail``: Margin trading (融资融券) daily detail.
+    P0 — chip distribution / limit boards / hot rank:
+      ``cyq_perf``, ``cyq_chips``, ``limit_list_d``, ``ths_hot``
+    P1 — fund flow / dragon-tiger / margin / sector / share float:
+      ``moneyflow``, ``top_list``, ``margin_detail``, ``ths_index``,
+      ``ths_member``, ``share_float``
+    P2 — pledge / repurchase / holder trade / ST / HSGT / survey /
+          broker picks / macro / forecast:
+      ``pledge_stat``, ``repurchase``, ``holdertrade``, ``stock_st``,
+      ``hsgt_stocks``, ``stk_surv``, ``broker_recommend``, ``cn_macro``
+      (gdp/cpi/ppi/shibor), ``forecast`` (report_rc + forecast fallback)
     """
 
     name = "tushare_featured"

@@ -30,6 +30,7 @@ from typing import Any
 
 from backtest.loaders.eastmoney_client import get_json, resolve_secid
 from backtest.loaders.sec_edgar_client import cik_for, get_company_facts
+from backtest.loaders._tushare_constants import TUSHARE_TOKEN_PLACEHOLDERS
 from src.agent.tools import BaseTool
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,14 @@ _EM_REPORT_NAME: dict[str, dict[str, str]] = {
 # Eastmoney mainland A-share markets (SZ/BJ = 0, SH = 1) and the HK market.
 _EM_A_MARKETS = ("0", "1")
 _EM_HK_MARKET = "116"
+
+# Mapping from statement names to Tushare fundamental table names.
+_TUSHARE_TABLE_MAP: dict[str, str] = {
+    "balance": "balancesheet",
+    "income": "income",
+    "cashflow": "cashflow",
+    "indicators": "fina_indicator",
+}
 
 _SEC_CONCEPTS: dict[str, tuple[str, ...]] = {
     "balance": (
@@ -284,6 +293,115 @@ def _fetch_eastmoney_statement(
     return {"periods": _cap_periods(periods)}
 
 
+def _fetch_tushare_statement(
+    code: str, *, statement: str, period: str
+) -> dict[str, Any]:
+    """Fetch one A-share/HK statement from Tushare, shaped into a result dict.
+
+    Uses :class:`TushareFundamentalProvider` for PIT-safe financial data.
+    The provider filters rows whose publication date is on or before the
+    current date, ensuring the data would have been available at that point
+    in time.
+
+    Args:
+        code: Symbol (e.g. ``"600519.SH"`` or ``"00700.HK"``).
+        statement: One of :data:`_VALID_STATEMENTS`.
+        period: ``"annual"`` or ``"quarter"``.
+
+    Returns:
+        ``{"ok": True, "data": [...period rows...], "source": "tushare",
+        "pit_safe": True}`` on success, or ``{"error": ...}`` on failure;
+        never raises.
+    """
+    # Check token before importing Tushare (which may have side effects).
+    try:
+        from src.config.accessor import get_env_config
+
+        token = get_env_config().data.tushare_token.strip()
+    except Exception as exc:
+        return {"error": f"Unable to read Tushare token configuration: {exc}"}
+
+    if token in TUSHARE_TOKEN_PLACEHOLDERS:
+        return {
+            "error": (
+                "Tushare token is not configured. "
+                "Set tushare_token in ~/.vibe-trading/.env"
+            )
+        }
+
+    table = _TUSHARE_TABLE_MAP[statement]
+
+    try:
+        import numpy as np
+        import pandas as pd
+
+        from backtest.loaders.tushare_fundamentals import TushareFundamentalProvider
+
+        provider = TushareFundamentalProvider()
+        schema = provider.describe_table(table)
+
+        # Request all non-identity columns to get full financial detail.
+        all_fields = [c.name for c in schema.columns if not c.required]
+
+        frame = provider.query_fundamentals(
+            table=table,
+            codes=[code],
+            as_of=pd.Timestamp.now(),
+            fields=all_fields,
+        )
+
+        if frame.empty:
+            return {"ok": True, "data": [], "source": "tushare", "pit_safe": True}
+
+        # Apply annual/quarter filtering on end_date (YYYYMMDD format).
+        if period == "annual":
+            annual_mask = frame["end_date"].astype(str).str.endswith("1231")
+            annual = frame[annual_mask]
+            if not annual.empty:
+                frame = annual
+            # else: fall through to return all periods when no annual rows match.
+
+        # Newest-first by end_date, capped to _MAX_PERIODS.
+        frame = frame.sort_values("end_date", ascending=False).head(_MAX_PERIODS)
+
+        # Convert to JSON-safe list of dicts.
+        frame = frame.where(pd.notna(frame), None)
+        raw_rows: list[dict[str, Any]] = frame.to_dict(orient="records")
+
+        # Ensure all values are JSON-serializable (numpy types, Timestamps).
+        clean_rows: list[dict[str, Any]] = []
+        for row in raw_rows:
+            clean: dict[str, Any] = {}
+            for k, v in row.items():
+                if isinstance(v, (np.integer,)):
+                    clean[k] = int(v)
+                elif isinstance(v, (np.floating,)):
+                    clean[k] = float(v) if not np.isnan(v) else None
+                elif isinstance(v, pd.Timestamp):
+                    clean[k] = v.strftime("%Y%m%d")
+                elif v is pd.NaT:
+                    clean[k] = None
+                else:
+                    clean[k] = v
+            clean_rows.append(clean)
+
+        return {
+            "ok": True,
+            "data": clean_rows,
+            "source": "tushare",
+            "pit_safe": True,
+        }
+
+    except Exception as exc:
+        logger.warning(
+            "tushare statement fetch failed for %s table=%s: %s",
+            code,
+            table,
+            exc,
+        )
+        return {"error": str(exc)}
+
+
 def _to_number(value: Any) -> float | None:
     """Coerce a numeric provider cell to float, preserving missing values."""
     if value in (None, "", "-"):
@@ -408,8 +526,10 @@ class FinancialStatementsTool(BaseTool):
         "statement, cash-flow statement, or key per-period indicators (margins, "
         "ROE, EPS, etc.). Markets: A-share (.SH/.SZ/.BJ), US (.US) and "
         "Hong Kong (.HK). US uses SEC EDGAR companyfacts; A-share and HK use "
-        "Eastmoney. Reports come back newest-first as flat per-period rows. Use "
-        'this to read fundamentals before building a valuation or screen. Example: '
+        "Eastmoney by default, or Tushare (PIT-safe financials) when "
+        "source='tushare'. Reports come back newest-first as flat per-period "
+        "rows. Use this to read fundamentals before building a valuation or "
+        'screen. Example: '
         '{"code": "600519.SH", "statement": "income", "period": "annual"}.'
     )
     parameters = {
@@ -440,6 +560,15 @@ class FinancialStatementsTool(BaseTool):
                     "(quarterly reports)."
                 ),
                 "default": "annual",
+            },
+            "source": {
+                "type": "string",
+                "enum": ["auto", "eastmoney", "tushare"],
+                "description": (
+                    "Data source: 'auto' (default, uses Eastmoney for A/HK), "
+                    "'eastmoney', or 'tushare' (Tushare PIT-safe financials)."
+                ),
+                "default": "auto",
             },
         },
         "required": ["code"],
@@ -480,14 +609,21 @@ class FinancialStatementsTool(BaseTool):
                 "code must carry a supported suffix: .SH/.SZ/.BJ, .US, or .HK"
             )
 
+        source = kwargs.get("source", "auto")
+
         if market == "us":
             result = _fetch_sec_statement(code, statement=statement, period=period)
-            source = "sec_edgar"
+            actual_source = "sec_edgar"
+        elif market in ("a_share", "hk") and source == "tushare":
+            result = _fetch_tushare_statement(
+                code, statement=statement, period=period
+            )
+            actual_source = "tushare"
         else:
             result = _fetch_eastmoney_statement(
                 code, statement=statement, period=period
             )
-            source = "eastmoney"
+            actual_source = "eastmoney"
 
         # The fetch failed for every requested code (here, the single ``code``)
         # iff its result carries an ``error``. Surface that as a top-level
@@ -496,7 +632,7 @@ class FinancialStatementsTool(BaseTool):
         envelope: dict[str, Any] = {
             "ok": not all_failed,
             "market": market,
-            "source": source,
+            "source": actual_source,
             "statement": statement,
             "period": period,
             "data": {code: result},

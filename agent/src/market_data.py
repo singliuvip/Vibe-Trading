@@ -7,6 +7,7 @@ import logging
 import math
 import re
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,7 @@ def fetch_market_data(
     else:
         groups = {source: list(codes)}
 
+    meta_sources: list[dict[str, Any]] = []
     for src, src_codes in groups.items():
         loader_cls = loader_resolver(src)
         loader = loader_cls()
@@ -116,10 +118,19 @@ def fetch_market_data(
                 for key, value in row.items():
                     row[key] = _json_safe(value)
             results[symbol] = cap_rows(records, max_rows)
+        meta_sources.append({
+            "data_source": src,
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            "is_provisional": False,
+        })
 
     unresolved = [code for code in codes if code not in results]
     if unresolved:
         results["_unresolved"] = unresolved
+
+    # Attach _meta: single source → inline dict; multi-source → list
+    if meta_sources:
+        results["_meta"] = meta_sources[0] if len(meta_sources) == 1 else meta_sources
 
     return results
 

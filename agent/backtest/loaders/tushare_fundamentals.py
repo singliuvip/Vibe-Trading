@@ -7,7 +7,7 @@ from typing import Any, Iterable
 
 import pandas as pd
 
-TUSHARE_TOKEN_PLACEHOLDERS = {"", "your-tushare-token"}
+from backtest.loaders._tushare_constants import TUSHARE_TOKEN_PLACEHOLDERS
 
 
 class DataProviderError(Exception):

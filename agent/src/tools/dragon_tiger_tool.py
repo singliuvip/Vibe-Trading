@@ -177,6 +177,15 @@ class DragonTigerTool(BaseTool):
                     "date; supply it to also fetch that security's seat detail."
                 ),
             },
+            "source": {
+                "type": "string",
+                "enum": ["auto", "eastmoney", "tushare"],
+                "description": (
+                    "Data source: 'auto' (default, uses Eastmoney), "
+                    "'eastmoney', or 'tushare' (Tushare top_list)."
+                ),
+                "default": "auto",
+            },
         },
         "required": ["date"],
     }
@@ -185,11 +194,12 @@ class DragonTigerTool(BaseTool):
         """Fetch dragon-tiger appearances (and seats when ``code`` is given).
 
         Args:
-            **kwargs: ``date`` (required, YYYY-MM-DD) and optional ``code``.
+            **kwargs: ``date`` (required, YYYY-MM-DD), optional ``code``,
+                and ``source`` ("auto"|"eastmoney"|"tushare", default "auto").
 
         Returns:
             A JSON string envelope. On success:
-            ``{"ok": true, "market": "a_share", "source": "eastmoney",
+            ``{"ok": true, "market": "a_share", "source": "eastmoney"|"tushare",
             "data": {...}}``. On failure: ``{"ok": false, "error": "..."}``.
         """
         date_arg = kwargs.get("date")
@@ -204,6 +214,11 @@ class DragonTigerTool(BaseTool):
         code_arg = kwargs.get("code")
         code = _bare_code(code_arg) if isinstance(code_arg, str) and code_arg.strip() else None
 
+        source = kwargs.get("source", "auto")
+
+        if source == "tushare":
+            return self._execute_tushare(trade_date, code_arg, code)
+
         try:
             data = self._collect(trade_date, code)
         except Exception as exc:  # noqa: BLE001 - surface any fetch failure as an envelope
@@ -212,6 +227,64 @@ class DragonTigerTool(BaseTool):
 
         return json.dumps(
             {"ok": True, "market": "a_share", "source": "eastmoney", "data": data},
+            ensure_ascii=False,
+        )
+
+    def _execute_tushare(
+        self, trade_date: str, code_arg: str | None, code: str | None
+    ) -> str:
+        """Fetch dragon-tiger board via Tushare top_list endpoint."""
+        from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+        try:
+            provider = TushareFeaturedProvider()
+        except RuntimeError as exc:
+            return self._error(f"Tushare not available: {exc}")
+
+        # Convert YYYY-MM-DD → YYYYMMDD for Tushare
+        ts_trade_date = trade_date.replace("-", "")
+
+        # Build ts_code from bare code if provided
+        ts_code = ""
+        if code_arg and code_arg.strip():
+            bare = code_arg.strip().upper().split(".", 1)[0]
+            ts_code = f"{bare}.SH"  # tentatively SH; Tushare top_list handles both
+
+        try:
+            envelope = provider.fetch_top_list(
+                trade_date=ts_trade_date, ts_code=ts_code
+            )
+        except Exception as exc:
+            logger.warning("tushare top_list failed: %s", exc)
+            return self._error(f"Tushare top_list fetch failed: {exc}")
+
+        rows = envelope.get("data", [])
+        # Normalize to our expected format
+        appearances = [
+            {
+                "code": r.get("ts_code", ""),
+                "name": r.get("name", ""),
+                "close": r.get("close"),
+                "change_pct": r.get("pct_change"),
+                "net_buy": r.get("net_amount"),
+                "buy_amount": r.get("l_buy"),
+                "sell_amount": r.get("l_sell"),
+                "turnover": r.get("amount"),
+                "reason": r.get("reason", ""),
+            }
+            for r in rows
+        ]
+
+        data: dict[str, Any] = {
+            "date": trade_date,
+            "count": len(appearances),
+            "appearances": appearances,
+        }
+        if code:
+            data["code"] = code
+
+        return json.dumps(
+            {"ok": True, "market": "a_share", "source": "tushare", "data": data},
             ensure_ascii=False,
         )
 

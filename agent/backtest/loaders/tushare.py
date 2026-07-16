@@ -16,7 +16,7 @@ from backtest.loaders.registry import register
 logger = logging.getLogger(__name__)
 
 
-TUSHARE_TOKEN_PLACEHOLDERS = {"", "your-tushare-token"}
+from backtest.loaders._tushare_constants import TUSHARE_TOKEN_PLACEHOLDERS  # noqa: F401 (re-export)
 
 
 def _is_index(code: str) -> bool:

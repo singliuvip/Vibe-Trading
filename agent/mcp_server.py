@@ -6,7 +6,7 @@ Zero API key required for HK/US/crypto research markets (yfinance, OKX,
 AKShare are free). Trading connector tools are profile-scoped and require the
 selected connector's own local app or OAuth setup.
 
-Surfaces 54 tools: skills, research goals, backtest/factor/options/pattern
+Surfaces 57 tools: skills, research goals, backtest/factor/options/pattern
 analysis, market data, fundamentals & capital-flow & news & discovery
 (get_fund_flow / get_dragon_tiger / get_northbound_flow / get_margin_trading /
 get_block_trades / get_shareholder_count / get_lockup_expiry / get_sector_info /
@@ -1117,6 +1117,78 @@ def get_market_data(
 
 
 # ---------------------------------------------------------------------------
+# Tushare advanced-privilege tools (read-only — requires Tushare membership)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool
+async def get_realtime_quotes(
+    codes: str = "",
+    patterns: str = "",
+    fields: str = "",
+    max_rows: int = 500,
+) -> str:
+    """获取 A 股盘中实时日K线快照（需要 Tushare A股日线RT 特权，15000+ 积分）。
+
+    通过 Tushare ``rt_k`` 端点获取沪深京 A 股的盘中实时日K线快照。
+    支持指定具体股票代码或通配符前缀批量拉取。
+
+    返回 JSON 字符串，包含 ``_meta`` 元数据和每个 ts_code 的实时行情字段。
+
+    Args:
+        codes: 股票代码，逗号分隔，如 "000001.SZ,600519.SH"（最多50个）。
+        patterns: 通配符前缀，逗号分隔，如 "3*.SZ,6*.SH"（最多3个）。
+        fields: 要返回的字段（逗号分隔，可选）。
+        max_rows: 每个标的返回的最大行数（默认500，0=不限制）。
+    """
+    from src.tools.tushare_realtime_tool import get_realtime_quotes as _tool
+
+    return _tool(codes=codes, patterns=patterns, fields=fields, max_rows=max_rows)
+
+
+@mcp.tool
+async def get_auction_data(
+    session: str,
+    codes: str = "",
+    trade_date: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    max_rows: int = 500,
+    fields: str = "",
+) -> str:
+    """获取 A 股集合竞价数据（需要 Tushare 集合竞价成交 特权，15000+ 积分）。
+
+    通过 Tushare 集合竞价端点获取沪深京 A 股的集合竞价成交明细。
+
+    - ``session="current"``  → ``stk_auction``（当日竞价，实时更新）
+    - ``session="open"``    → ``stk_auction_o``（开盘竞价历史）
+    - ``session="close"``   → ``stk_auction_c``（收盘竞价历史）
+
+    返回 JSON 字符串，包含 ``_meta`` 元数据和每个 ts_code 的竞价数据。
+
+    Args:
+        session: 竞价时段 — "current"（当日）、"open"（开盘历史）、"close"（收盘历史）。
+        codes: 股票代码，逗号分隔，如 "000001.SZ,600519.SH"（最多50个）。
+        trade_date: 交易日期 YYYYMMDD（默认今天）。
+        start_date: 起始日期 YYYYMMDD（历史查询）。
+        end_date: 结束日期 YYYYMMDD（历史查询）。
+        max_rows: 每个标的返回的最大行数（默认500，0=不限制）。
+        fields: 要返回的字段（逗号分隔，可选，透传到 Tushare）。
+    """
+    from src.tools.tushare_auction_tool import get_auction_data as _tool
+
+    return _tool(
+        session=session,
+        codes=codes,
+        trade_date=trade_date,
+        start_date=start_date,
+        end_date=end_date,
+        max_rows=max_rows,
+        fields=fields,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Read-only fundamentals, flow, news & discovery tools
 #
 # Each wrapper delegates to the auto-discovered local registry, exactly like
@@ -1179,7 +1251,8 @@ def _execute_key_gated(name: str, params: dict[str, Any]) -> str:
 
 
 @mcp.tool
-def get_fund_flow(codes: list[str], period: str = "daily", days: int = 30) -> str:
+def get_fund_flow(codes: list[str], period: str = "daily", days: int = 30,
+                  source: str = "auto") -> str:
     """Fetch order-bucket net capital inflow (main/super-large/large/medium/small).
 
     Markets: A-share (.SH/.SZ/.BJ), Hong Kong (.HK) and US (.US). Use this to
@@ -1191,14 +1264,17 @@ def get_fund_flow(codes: list[str], period: str = "daily", days: int = 30) -> st
         codes: Symbols with market suffix, e.g. ["600519.SH", "00700.HK"].
         period: "daily" (daily net-inflow history) or "min" (per-minute line).
         days: For period="daily", number of most-recent daily bars to keep.
+        source: "auto" (default, Eastmoney), "eastmoney", or "tushare" (A-share only).
     """
     registry = _get_registry()
-    return registry.execute("get_fund_flow", {"codes": codes, "period": period, "days": days})
+    return registry.execute("get_fund_flow", {"codes": codes, "period": period,
+                            "days": days, "source": source})
 
 
 @mcp.tool
-def get_dragon_tiger(date: str, code: str | None = None) -> str:
-    """Fetch the A-share dragon-tiger board (龙虎榜) for a trade date (Eastmoney).
+def get_dragon_tiger(date: str, code: str | None = None,
+                     source: str = "auto") -> str:
+    """Fetch the A-share dragon-tiger board (龙虎榜) for a trade date.
 
     Markets: China A-share (SH/SZ). Omit ``code`` for the full-market list of
     every security on the board that day; supply ``code`` to also get that
@@ -1207,8 +1283,9 @@ def get_dragon_tiger(date: str, code: str | None = None) -> str:
     Args:
         date: Trade date in YYYY-MM-DD format (e.g. 2024-01-02).
         code: Optional A-share symbol or bare code (e.g. "600519.SH" or "600519").
+        source: "auto" (default, Eastmoney), "eastmoney", or "tushare".
     """
-    params: dict[str, Any] = {"date": date}
+    params: dict[str, Any] = {"date": date, "source": source}
     if code:
         params["code"] = code
     registry = _get_registry()
@@ -1231,8 +1308,9 @@ def get_northbound_flow(lookback_days: int = 30) -> str:
 
 
 @mcp.tool
-def get_margin_trading(code: str, days: int = 30) -> str:
-    """Fetch an A-share stock's daily margin-trading (融资融券) balances (Eastmoney).
+def get_margin_trading(code: str, days: int = 30,
+                       source: str = "auto") -> str:
+    """Fetch an A-share stock's daily margin-trading (融资融券) balances.
 
     Returns outstanding financing balance, financing buy amount,
     securities-lending balance, and combined RZRQ balance, one row per trading
@@ -1242,9 +1320,11 @@ def get_margin_trading(code: str, days: int = 30) -> str:
         code: A-share code: bare ("600519"), suffixed ("600519.SH"), or
             exchange-prefixed ("sh600519").
         days: Number of most-recent trading days to return.
+        source: "auto" (default, Eastmoney), "eastmoney", or "tushare".
     """
     registry = _get_registry()
-    return registry.execute("get_margin_trading", {"code": code, "days": days})
+    return registry.execute("get_margin_trading", {"code": code, "days": days,
+                            "source": source})
 
 
 @mcp.tool
@@ -1392,22 +1472,125 @@ def get_sec_filings(
 
 
 @mcp.tool
-def get_financial_statements(code: str, statement: str = "indicators", period: str = "annual") -> str:
+def get_financial_statements(code: str, statement: str = "indicators", period: str = "annual", source: str = "auto") -> str:
     """Fetch a stock's financial statements or key per-period indicators.
 
-    Markets: A-share (.SH/.SZ/.BJ, via Sina), US (.US) and Hong Kong (.HK, via
-    Eastmoney). Reports come back newest-first as flat per-period rows. Use this
+    Markets: A-share (.SH/.SZ/.BJ), US (.US) and Hong Kong (.HK).
+    US uses SEC EDGAR companyfacts; A-share and HK use Eastmoney by default,
+    or Tushare (PIT-safe financials) when source='tushare'.
+    Reports come back newest-first as flat per-period rows. Use this
     to read fundamentals before building a valuation or screen.
 
     Args:
         code: Single symbol with a market suffix (e.g. "600519.SH", "AAPL.US").
         statement: "balance", "income", "cashflow", or "indicators".
         period: "annual" or "quarter".
+        source: Data source: "auto" (default, Eastmoney for A/HK),
+            "eastmoney", or "tushare" (Tushare PIT-safe financials).
     """
     registry = _get_registry()
     return registry.execute(
         "get_financial_statements",
-        {"code": code, "statement": statement, "period": period},
+        {"code": code, "statement": statement, "period": period, "source": source},
+    )
+
+
+@mcp.tool
+async def search_security_master(
+    kind: str,
+    market: str = "",
+    list_status: str = "L",
+) -> str:
+    """查询 A 股证券主数据（需要 Tushare 基础数据权限）。
+
+    获取股票列表、ETF/基金列表或期权合约列表。
+
+    - ``kind="stock"``：股票列表，可按市场（SH/SZ/BJ）和上市状态（L=上市/D=退市/P=暂停）过滤。
+    - ``kind="fund"``：基金/ETF 列表，可按市场类型（E=ETF/O=开放式）过滤。
+    - ``kind="option"``：期权合约列表，可按交易所（SSE=上交所/SZSE=深交所）过滤。
+
+    Args:
+        kind: 证券类型 — "stock"（股票）、"fund"（基金/ETF）、"option"（期权）。
+        market: 可选市场过滤。stock: SH/SZ/BJ；fund: E/O 等；option: SSE/SZSE。
+            空字符串=不过滤。
+        list_status: 仅 stock 生效 — "L"（上市，默认）、"D"（退市）、"P"（暂停）。
+    """
+    from src.tools.tushare_refdata_tool import search_security_master as _tool
+
+    return _tool(kind=kind, market=market, list_status=list_status)
+
+
+@mcp.tool
+async def get_featured_data(
+    kind: str,
+    ts_code: str = "",
+    trade_date: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    limit_type: str = "",
+    market: str = "",
+    exchange: str = "",
+    type: str = "",
+    ann_date: str = "",
+    month: str = "",
+    indicator: str = "",
+) -> str:
+    """查询 Tushare 特色数据（需要相应特权）。
+
+    支持十六种数据类型：
+    - ``kind="cyq_perf"``：每日筹码及胜率（筹码成本、加权平均成本、胜率）。
+    - ``kind="cyq_chips"``：每日筹码分布（各价格区间的持仓量）。
+    - ``kind="limit_list"``：涨跌停榜单（含封单、炸板、连板信息）。
+    - ``kind="ths_hot"``：同花顺热榜（个股/概念/ETF/转债热度排名）。
+    - ``kind="ths_index"``：同花顺概念板块列表（概念/行业/地域）。
+    - ``kind="ths_member"``：同花顺概念板块成分股。
+    - ``kind="share_float"``：解禁/流通股本（流通股本、自由流通股本、总股本）。
+    - ``kind="pledge_stat"``：股权质押统计（质押比例、质押股数）。
+    - ``kind="repurchase"``：股票回购（回购股数、金额、价格区间）。
+    - ``kind="holdertrade"``：股东增减持（变动数量、变动比例）。
+    - ``kind="stock_st"``：ST股票列表（S/ST/*ST）。
+    - ``kind="hsgt_stocks"``：沪港通标的列表（买卖金额）。
+    - ``kind="stk_surv"``：机构调研（调研机构、调研内容）。
+    - ``kind="broker_recommend"``：券商金股（月度推荐金股及理由）。
+    - ``kind="cn_macro"``：中国宏观经济（GDP/CPI/PPI/Shibor）。
+    - ``kind="forecast"``：盈利预测（机构预测+业绩预告）。
+
+    Args:
+        kind: 数据类型 — "cyq_perf"（筹码胜率）、"cyq_chips"（筹码分布）、
+            "limit_list"（涨跌停榜单）、"ths_hot"（热榜）、
+            "ths_index"（概念板块列表）、"ths_member"（概念板块成分）、
+            "share_float"（解禁/流通股本）、"pledge_stat"（股权质押统计）、
+            "repurchase"（股票回购）、"holdertrade"（股东增减持）、
+            "stock_st"（ST列表）、"hsgt_stocks"（沪港通标的）、
+            "stk_surv"（机构调研）、"broker_recommend"（券商金股）、
+            "cn_macro"（中国宏观）、"forecast"（盈利预测）。
+        ts_code: 股票/板块代码（如 000001.SZ 或 883900.TI），空字符串=全市场/全部。
+        trade_date: 交易日期 YYYYMMDD。
+        start_date: 起始日期 YYYYMMDD。
+        end_date: 结束日期 YYYYMMDD。
+        limit_type: 仅 limit_list：U(涨停)/D(跌停)/Z(炸板)，空字符串=全部。
+        market: 仅 ths_hot：A(A股)/HK(港股)，空字符串=全部。
+        exchange: 仅 ths_index：交易所代码，空字符串=全部。
+        type: 仅 ths_index：板块类型 N(概念)/I(行业)/R(地域)，空字符串=全部。
+        ann_date: 公告日期 YYYYMMDD，用于 pledge_stat / repurchase / holdertrade。
+        month: 月份 YYYYMM，用于 broker_recommend（券商金股）。
+        indicator: 宏观指标，仅 cn_macro：gdp/cpi/ppi/shibor。
+    """
+    from src.tools.tushare_featured_tool import get_featured_data as _tool
+
+    return _tool(
+        kind=kind,
+        ts_code=ts_code,
+        trade_date=trade_date,
+        start_date=start_date,
+        end_date=end_date,
+        limit_type=limit_type,
+        market=market,
+        exchange=exchange,
+        type=type,
+        ann_date=ann_date,
+        month=month,
+        indicator=indicator,
     )
 
 

@@ -156,6 +156,15 @@ class MarginTradingTool(BaseTool):
                 ),
                 "default": _DEFAULT_DAYS,
             },
+            "source": {
+                "type": "string",
+                "enum": ["auto", "eastmoney", "tushare"],
+                "description": (
+                    "Data source: 'auto' (default, uses Eastmoney), "
+                    "'eastmoney', or 'tushare' (Tushare margin_detail)."
+                ),
+                "default": "auto",
+            },
         },
         "required": ["code"],
     }
@@ -164,11 +173,12 @@ class MarginTradingTool(BaseTool):
         """Fetch margin-trading rows and return a JSON envelope string.
 
         Args:
-            **kwargs: ``code`` (required, str) and ``days`` (optional int).
+            **kwargs: ``code`` (required, str), ``days`` (optional int),
+                ``source`` ("auto"|"eastmoney"|"tushare", default "auto").
 
         Returns:
             A JSON string. On success:
-            ``{"ok": true, "market": "a_share", "source": "eastmoney",
+            ``{"ok": true, "market": "a_share", "source": "eastmoney"|"tushare",
             "data": {"code": str, "rows": [...]}}``. On failure:
             ``{"ok": false, "error": str}``.
         """
@@ -179,6 +189,10 @@ class MarginTradingTool(BaseTool):
                 "(e.g. 600519.SH or 000001.SZ)."
             )
         days = _clamp_days(kwargs.get("days", _DEFAULT_DAYS))
+        source = kwargs.get("source", "auto")
+
+        if source == "tushare":
+            return self._execute_tushare(kwargs.get("code", ""), code, days)
 
         try:
             payload = eastmoney_client.get_json(
@@ -212,6 +226,59 @@ class MarginTradingTool(BaseTool):
                 "market": "a_share",
                 "source": "eastmoney",
                 "data": {"code": code, "rows": rows},
+            },
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _execute_tushare(raw_code: str, bare_code: str, days: int) -> str:
+        """Fetch margin trading via Tushare margin_detail endpoint."""
+        from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+        try:
+            provider = TushareFeaturedProvider()
+        except RuntimeError as exc:
+            return _err(f"Tushare not available: {exc}")
+
+        # Build ts_code from the raw input (e.g. "600519.SH" or "600519")
+        ts_code = raw_code.strip().upper()
+        if "." not in ts_code:
+            ts_code = f"{bare_code}.SH"  # tentatively SH
+
+        try:
+            envelope = provider.fetch_margin_detail(ts_code=ts_code)
+        except Exception as exc:
+            logger.warning("tushare margin_detail failed for %s: %s", ts_code, exc)
+            return _err(f"Tushare margin_detail fetch failed: {exc}")
+
+        rows = envelope.get("data", [])
+        # Normalize to our expected format
+        normalized = [
+            {
+                "trade_date": r.get("trade_date", ""),
+                "financing_balance": r.get("rzye"),
+                "financing_buy": r.get("rzmre"),
+                "financing_repay": r.get("rzche"),
+                "short_balance": r.get("rqye"),
+                "short_volume": r.get("rqyl"),
+                "margin_total_balance": r.get("rzrqye"),
+            }
+            for r in rows
+        ]
+        # Newest-first
+        normalized = sorted(
+            normalized,
+            key=lambda r: str(r.get("trade_date", "")),
+            reverse=True,
+        )
+        normalized = normalized[:days]
+
+        return json.dumps(
+            {
+                "ok": True,
+                "market": "a_share",
+                "source": "tushare",
+                "data": {"code": bare_code, "rows": normalized},
             },
             ensure_ascii=False,
         )

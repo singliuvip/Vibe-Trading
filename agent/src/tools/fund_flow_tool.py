@@ -20,6 +20,7 @@ import logging
 from typing import Any
 
 from backtest.loaders.eastmoney_client import get_json, resolve_secid
+from backtest.loaders._tushare_constants import TUSHARE_TOKEN_PLACEHOLDERS
 from src.agent.tools import BaseTool
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,15 @@ class FundFlowTool(BaseTool):
                 ),
                 "default": 30,
             },
+            "source": {
+                "type": "string",
+                "enum": ["auto", "eastmoney", "tushare"],
+                "description": (
+                    "Data source: 'auto' (default, uses Eastmoney), "
+                    "'eastmoney', or 'tushare' (Tushare moneyflow, A-share only)."
+                ),
+                "default": "auto",
+            },
         },
         "required": ["codes"],
     }
@@ -190,12 +200,13 @@ class FundFlowTool(BaseTool):
 
         Args:
             **kwargs: ``codes`` (list[str], required), ``period`` ("min"|"daily",
-                default "daily"), ``days`` (int, default 30).
+                default "daily"), ``days`` (int, default 30), ``source``
+                ("auto"|"eastmoney"|"tushare", default "auto").
 
         Returns:
             A JSON string ``{"ok": true, "market": "stock", "source":
-            "eastmoney", "data": {...}}`` on success, or ``{"ok": false,
-            "error": ...}`` on a request-level failure.
+            "eastmoney"|"tushare", "data": {...}}`` on success, or
+            ``{"ok": false, "error": ...}`` on a request-level failure.
         """
         codes = kwargs.get("codes")
         if not isinstance(codes, list) or not codes:
@@ -212,6 +223,13 @@ class FundFlowTool(BaseTool):
             return _error("days must be a positive integer")
         days = min(days, _MAX_DAYS)
 
+        source = kwargs.get("source", "auto")
+
+        # Tushare path: A-share only, single symbol at a time (batch w/ first)
+        if source == "tushare":
+            return self._execute_tushare(codes, period, days)
+
+        # Eastmoney path (default / auto)
         results = {
             symbol: _fetch_symbol_flow(symbol, period=period, days=days)
             for symbol in (c.strip() for c in codes)
@@ -220,6 +238,64 @@ class FundFlowTool(BaseTool):
             "ok": True,
             "market": "stock",
             "source": "eastmoney",
+            "period": period,
+            "buckets": list(_BUCKETS),
+            "data": results,
+        }
+        return json.dumps(envelope, ensure_ascii=False)
+
+    @staticmethod
+    def _is_a_share(symbol: str) -> bool:
+        """Check if a symbol is an A-share (.SH/.SZ/.BJ)."""
+        suffix = symbol.strip().rpartition(".")[2].upper()
+        return suffix in ("SH", "SZ", "BJ")
+
+    def _execute_tushare(
+        self, codes: list[str], period: str, days: int
+    ) -> str:
+        """Fetch fund flow via Tushare moneyflow endpoint.
+
+        Tushare's moneyflow returns full rows per ts_code x trade_date.
+        We filter client-side for daily period and cap rows.
+        """
+        from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+        try:
+            provider = TushareFeaturedProvider()
+        except RuntimeError as exc:
+            return _error(f"Tushare not available: {exc}")
+
+        results: dict[str, Any] = {}
+        for code in (c.strip() for c in codes):
+            if not self._is_a_share(code):
+                results[code] = {"symbol": code, "error": "tushare moneyflow supports A-shares only"}
+                continue
+
+            try:
+                # Convert to Tushare ts_code format (e.g. 600519.SH)
+                raw = code.rpartition(".")[0].upper() + "." + code.rpartition(".")[2].upper()
+                # Tushare moneyflow always returns daily data
+                envelope = provider.fetch_moneyflow(ts_code=raw)
+                rows = envelope.get("data", [])
+                # Ensure newest-first by trade_date
+                rows = sorted(rows, key=lambda r: str(r.get("trade_date", "")), reverse=True)
+                if len(rows) > days:
+                    rows = rows[:days]
+                if len(rows) > _MAX_ROWS_PER_SYMBOL:
+                    rows = rows[:_MAX_ROWS_PER_SYMBOL]
+                results[code] = {
+                    "symbol": code,
+                    "rows": rows,
+                    "data_source": "tushare",
+                }
+            except Exception as exc:
+                logger.warning("tushare moneyflow failed for %s: %s", code, exc)
+                results[code] = {"symbol": code, "error": str(exc)}
+
+        envelope = {
+            "ok": True,
+            "market": "stock",
+            "source": "tushare",
             "period": period,
             "buckets": list(_BUCKETS),
             "data": results,

@@ -131,14 +131,22 @@ class TushareRealtimeMinuteProvider:
             time_val = row.get("time", "")
             if time_val and cn_tz:
                 try:
-                    # Tushare returns time like "09:31" (HH:MM) for rt_min
-                    if isinstance(time_val, str) and ":" in time_val and "T" not in time_val:
-                        # It's HH:MM — prepend today's date in Asia/Shanghai
+                    time_str = str(time_val)
+                    # Detect if time_val already contains a date (YYYY-MM-DD or YYYYMMDD)
+                    has_date = bool(re.match(r"^\d{4}[-/]\d{2}[-/]\d{2}", time_str)) or bool(
+                        re.match(r"^\d{8}", time_str)
+                    )
+                    if not has_date:
+                        # Bare HH:MM or HH:MM:SS — prepend today's date in CN timezone
                         today_cn = datetime.now(cn_tz).strftime("%Y-%m-%d")
-                        time_val = f"{today_cn}T{time_val}:00"
-                    ts_dt = pd.Timestamp(time_val)
+                        time_str = f"{today_cn}T{time_str}"
+                        if ":" not in time_str.split("T", 1)[-1]:
+                            time_str += ":00"
+                    ts_dt = pd.Timestamp(time_str)
                     if ts_dt.tz is None:
                         ts_dt = ts_dt.tz_localize(cn_tz)
+                    else:
+                        ts_dt = ts_dt.tz_convert(cn_tz)
                     timestamp = ts_dt.isoformat()
                 except Exception:
                     timestamp = str(time_val)

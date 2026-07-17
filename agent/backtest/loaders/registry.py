@@ -229,3 +229,73 @@ def get_loader_cls_with_fallback(source: str) -> Type[Any]:
     raise NoAvailableSourceError(
         f"Data source '{source}' is unavailable and no fallback found."
     )
+
+
+# ---------------------------------------------------------------------------
+# Realtime provider registry (separate from LOADER_REGISTRY / FALLBACK_CHAINS)
+#
+# Realtime providers are NOT historical loaders — they serve live intraday data
+# (rt_k, rt_min, stk_auction, etc.) and must not enter the fallback chain.
+# ---------------------------------------------------------------------------
+
+REALTIME_PROVIDER_REGISTRY: dict[tuple[str, str], type] = {}
+
+_registered_realtime = False
+
+
+def register_realtime_provider(source: str, capability: str, provider_cls: type) -> None:
+    """Register a realtime provider class in the realtime-only registry.
+
+    Args:
+        source: Data source name (e.g. "tushare").
+        capability: Endpoint capability (e.g. "rt_k", "rt_min", "stk_auction").
+        provider_cls: The provider class (not instance).
+    """
+    REALTIME_PROVIDER_REGISTRY[(source, capability)] = provider_cls
+
+
+def resolve_realtime_provider(source: str, capability: str) -> type | None:
+    """Resolve a realtime provider class by (source, capability).
+
+    Args:
+        source: Data source name.
+        capability: Endpoint capability.
+
+    Returns:
+        Provider class or None if not found.
+    """
+    _ensure_realtime_registered()
+    return REALTIME_PROVIDER_REGISTRY.get((source, capability))
+
+
+def _ensure_realtime_registered() -> None:
+    """Lazily import realtime provider modules so they self-register.
+
+    Safe to call multiple times — only runs the imports once.
+    Providers whose dependencies are missing are silently skipped.
+    """
+    global _registered_realtime
+    if _registered_realtime:
+        return
+    _registered_realtime = True
+
+    _realtime_modules = [
+        "backtest.loaders.tushare_realtime",
+        "backtest.loaders.tushare_realtime_minute",
+        "backtest.loaders.tushare_auction",
+    ]
+    import importlib
+
+    for mod in _realtime_modules:
+        try:
+            importlib.import_module(mod)
+        except Exception:
+            pass
+
+
+# Self-registration: each realtime provider module calls this at import time.
+def _auto_register_realtime_providers() -> None:
+    """Called by provider modules to register themselves."""
+    # Individual providers register themselves via register_realtime_provider()
+    # at module level. This function exists as a hook point for tests.
+    pass

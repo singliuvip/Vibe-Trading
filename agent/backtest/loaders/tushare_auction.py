@@ -226,3 +226,12 @@ class TushareAuctionProvider:
             "is_provisional": is_provisional,
             "data": data,
         }
+
+
+# Self-register in the realtime provider registry (not the historical LOADER_REGISTRY).
+try:
+    from backtest.loaders.registry import register_realtime_provider
+
+    register_realtime_provider("tushare", "stk_auction", TushareAuctionProvider)
+except Exception:
+    pass

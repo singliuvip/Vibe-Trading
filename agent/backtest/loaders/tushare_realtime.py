@@ -135,3 +135,12 @@ class TushareRealtimeProvider:
             "is_provisional": True,
             "data": data,
         }
+
+
+# Self-register in the realtime provider registry (not the historical LOADER_REGISTRY).
+try:
+    from backtest.loaders.registry import register_realtime_provider
+
+    register_realtime_provider("tushare", "rt_k", TushareRealtimeProvider)
+except Exception:
+    pass

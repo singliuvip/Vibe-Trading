@@ -26,6 +26,10 @@ _A_SHARE_CODE_RE = re.compile(r"^\d{6}\.(SH|SZ|BJ)$", re.I)
 _DEFAULT_MAX_CODES = 50
 _DEFAULT_MAX_PATTERNS = 3
 _DEFAULT_MAX_ROWS = 500
+_DEFAULT_MAX_MINUTE_ROWS = 1000
+
+# Allowed frequencies for rt_min.
+_VALID_MINUTE_FREQUENCIES = frozenset({"1MIN", "5MIN", "15MIN", "30MIN", "60MIN"})
 
 # ---------------------------------------------------------------------------
 # Simple in-process rate limiter (per-endpoint, min 1 s between calls)
@@ -105,11 +109,13 @@ class TushareMarketDataService:
 
     def __init__(
         self,
-        realtime_provider: Any,
-        auction_provider: Any,
+        realtime_provider: Any = None,
+        auction_provider: Any = None,
+        minute_provider: Any = None,
     ) -> None:
         self._rt = realtime_provider
         self._auction = auction_provider
+        self._minute = minute_provider
 
     # ------------------------------------------------------------------
     # get_realtime_quotes
@@ -300,6 +306,105 @@ class TushareMarketDataService:
             "is_provisional": result.get("is_provisional", is_provisional),
             "session": session,
         }
+
+        return result
+
+    # ------------------------------------------------------------------
+    # get_realtime_minute_bars
+    # ------------------------------------------------------------------
+
+    def get_realtime_minute_bars(
+        self,
+        codes: list[str],
+        frequency: str = "1MIN",
+        max_rows: int = _DEFAULT_MAX_MINUTE_ROWS,
+    ) -> dict[str, Any]:
+        """Fetch A-share real-time minute K-line bars (``rt_min``).
+
+        Input validation, rate-limit, and row-capping are applied before
+        returning the provider envelope.
+
+        Args:
+            codes: List of ts_codes.
+            frequency: K-line period — 1MIN/5MIN/15MIN/30MIN/60MIN.
+            max_rows: Per-symbol cap (default 1000). 0 = uncapped.
+
+        Returns:
+            Envelope dict with ``_meta`` and per-symbol ``data`` keys.
+        """
+        # --- provider guard ---
+        if self._minute is None:
+            return self._error(
+                "get_realtime_minute_bars requires minute_provider to be set. "
+                "Pass minute_provider=TushareRealtimeMinuteProvider() when constructing TushareMarketDataService.",
+                endpoint="rt_min",
+                is_provisional=True,
+            )
+
+        # --- input validation ---
+        if not codes:
+            return self._error(
+                "At least one code is required.",
+                endpoint="rt_min",
+                is_provisional=True,
+            )
+
+        for c in codes:
+            if not _A_SHARE_CODE_RE.match(c):
+                return self._error(
+                    f"Invalid A-share code: {c!r}. Expected format e.g. '000001.SZ'.",
+                    endpoint="rt_min",
+                    is_provisional=True,
+                )
+
+        if frequency not in _VALID_MINUTE_FREQUENCIES:
+            return self._error(
+                f"Invalid frequency: {frequency!r}. Must be one of {sorted(_VALID_MINUTE_FREQUENCIES)}.",
+                endpoint="rt_min",
+                is_provisional=True,
+            )
+
+        if max_rows < 0 or max_rows > _DEFAULT_MAX_MINUTE_ROWS:
+            return self._error(
+                f"max_rows must be between 0 and {_DEFAULT_MAX_MINUTE_ROWS}, got {max_rows}.",
+                endpoint="rt_min",
+                is_provisional=True,
+            )
+
+        # --- rate-limit (independent bucket, not shared with rt_k) ---
+        _rate_limit("rt_min")
+
+        # --- call provider ---
+        result = self._minute.fetch_bars(codes=codes, frequency=frequency)
+
+        # --- row cap ---
+        row_limit = max_rows if max_rows > 0 else _DEFAULT_MAX_MINUTE_ROWS
+        result["data"] = {
+            code: self._cap_dict_rows(rows, row_limit)
+            for code, rows in result.get("data", {}).items()
+        }
+
+        # --- session metadata ---
+        result["market_session"] = "active" if _is_cn_market_session() else "outside_hours"
+
+        # --- possibly_truncated flag ---
+        possibly_truncated = any(
+            isinstance(rows, list) and len(rows) >= row_limit
+            for rows in result.get("data", {}).values()
+        )
+
+        result["_meta"] = {
+            "data_source": result.get("data_source", "tushare"),
+            "endpoint": result.get("endpoint", "rt_min"),
+            "frequency": frequency,
+            "retrieved_at": result.get("retrieved_at", datetime.now(timezone.utc).isoformat()),
+            "is_provisional": result.get("is_provisional", True),
+            "market_session": result["market_session"],
+            "timezone": "Asia/Shanghai",
+            "row_limit": row_limit,
+        }
+        if possibly_truncated:
+            result["_meta"]["possibly_truncated"] = True
 
         return result
 

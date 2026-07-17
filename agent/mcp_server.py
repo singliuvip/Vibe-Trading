@@ -1188,6 +1188,30 @@ async def get_auction_data(
     )
 
 
+@mcp.tool
+async def get_realtime_minute_bars(
+    codes: str,
+    frequency: str = "1MIN",
+    max_rows: int = 1000,
+) -> str:
+    """获取 A 股/ETF 当日实时分钟 K 线（需要 Tushare rt_min 正式权限）。
+
+    通过 Tushare ``rt_min`` 端点获取沪深京 A 股及 ETF 的当日实时分钟 K 线数据。
+    支持 1MIN/5MIN/15MIN/30MIN/60MIN 五种周期。
+
+    返回 JSON 字符串，包含 ``_meta`` 元数据和每个 ts_code 的分钟 K 线数组。
+    数据始终为盘中实时（is_provisional=true），不写磁盘缓存。
+
+    Args:
+        codes: 股票代码，逗号分隔，如 "600000.SH,000001.SZ"
+        frequency: K线周期，可选 1MIN/5MIN/15MIN/30MIN/60MIN
+        max_rows: 每个标的最大返回行数（默认1000，0=不限制）
+    """
+    from src.tools.tushare_realtime_minute_tool import get_realtime_minute_bars as _tool
+
+    return _tool(codes=codes, frequency=frequency, max_rows=max_rows)
+
+
 # ---------------------------------------------------------------------------
 # Read-only fundamentals, flow, news & discovery tools
 #

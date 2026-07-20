@@ -163,7 +163,7 @@ Comprehensive knowledge base covering:
 
 Use `load_skill(name)` to access full methodology docs with code templates.
 
-## Available MCP Tools (54)
+## Available MCP Tools (62)
 
 | Tool | Description | API Key |
 |------|-------------|---------|
@@ -194,6 +194,11 @@ Use `load_skill(name)` to access full methodology docs with code templates.
 | `get_stock_profile` | Valuation, analyst estimates & institutional holdings (US/HK) | None |
 | `screen_market` | Market screener with fundamental/technical filters | None* |
 | `search_symbol` | Symbol / ticker search across markets | None |
+| `search_security_master` | 查询 A 股证券主数据（股票/ETF/期权列表），需 Tushare 基础数据权限 | TUSHARE_TOKEN |
+| `get_featured_data` | 查询 Tushare 特色数据（41种：筹码/涨停/资金流/龙虎榜/融资融券/宏观等） | TUSHARE_TOKEN |
+| `get_realtime_quotes` | 获取 A 股盘中实时日K线快照，需 Tushare A股日线RT 特权(15000+分) | TUSHARE_TOKEN |
+| `get_auction_data` | 获取 A 股集合竞价数据（当日/开盘/收盘历史），需 Tushare 集合竞价成交特权 | TUSHARE_TOKEN |
+| `get_realtime_minute_bars` | 获取 A 股/ETF 当日实时分钟 K 线，需 Tushare rt_min 正式权限 | TUSHARE_TOKEN |
 | `get_macro_series` | FRED macroeconomic series | FRED_API_KEY |
 | `iwencai_search` | A-share natural-language research search | IWENCAI_KEY |
 | `web_search` | Search the web via DuckDuckGo | None |

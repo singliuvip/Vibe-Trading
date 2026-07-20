@@ -12,6 +12,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from src.agent.tools import BaseTool
+
 logger = logging.getLogger(__name__)
 
 _VALID_KINDS = frozenset({"stock", "fund", "option"})
@@ -90,3 +92,34 @@ def search_security_master(
     # Merge in ok flag.
     envelope: dict[str, Any] = {"ok": "error" not in result, **result}
     return json.dumps(envelope, ensure_ascii=False, indent=2, allow_nan=False)
+
+
+class TushareRefDataTool(BaseTool):
+    """BaseTool adapter for search_security_master."""
+    name = "search_security_master"
+    description = search_security_master.__doc__
+    parameters = {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": sorted(_VALID_KINDS),
+                "description": "Security type: 'stock', 'fund', or 'option'.",
+            },
+            "market": {
+                "type": "string",
+                "description": "Optional market filter. stock: SH/SZ/BJ; fund: E/O etc; option: SSE/SZSE.",
+            },
+            "list_status": {
+                "type": "string",
+                "enum": ["L", "D", "P"],
+                "description": "Listing status (stock only): L(listed), D(delisted), P(paused).",
+                "default": "L",
+            },
+        },
+        "required": ["kind"],
+    }
+    is_readonly = True
+
+    def execute(self, **kwargs: Any) -> str:
+        return search_security_master(**kwargs)

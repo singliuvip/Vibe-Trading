@@ -244,11 +244,17 @@ class DragonTigerTool(BaseTool):
         # Convert YYYY-MM-DD → YYYYMMDD for Tushare
         ts_trade_date = trade_date.replace("-", "")
 
-        # Build ts_code from bare code if provided
+        # Build ts_code from code_arg, preserving original suffix
         ts_code = ""
         if code_arg and code_arg.strip():
-            bare = code_arg.strip().upper().split(".", 1)[0]
-            ts_code = f"{bare}.SH"  # tentatively SH; Tushare top_list handles both
+            raw = code_arg.strip().upper()
+            if "." in raw:
+                # e.g. "000001.SZ" → keep as-is
+                ts_code = raw
+            else:
+                # bare code like "000001" — leave empty so top_list returns all
+                # The caller will filter by bare code client-side if needed
+                ts_code = ""
 
         try:
             envelope = provider.fetch_top_list(
@@ -258,6 +264,9 @@ class DragonTigerTool(BaseTool):
             logger.warning("tushare top_list failed: %s", exc)
             return self._error(f"Tushare top_list fetch failed: {exc}")
 
+        # Check for Tushare API-level errors
+        if envelope.get("error"):
+            return self._error(f"Tushare API error: {envelope['error']}")
         rows = envelope.get("data", [])
         # Normalize to our expected format
         appearances = [

@@ -12,6 +12,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from src.agent.tools import BaseTool
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,3 +68,36 @@ def get_realtime_quotes(
             ensure_ascii=False,
             indent=2,
         )
+
+
+class TushareRealtimeTool(BaseTool):
+    """BaseTool adapter for get_realtime_quotes."""
+    name = "get_realtime_quotes"
+    description = get_realtime_quotes.__doc__
+    parameters = {
+        "type": "object",
+        "properties": {
+            "codes": {
+                "type": "string",
+                "description": "逗号分隔的股票代码列表，如 '000001.SZ,600519.SH'（最多50个）。",
+            },
+            "patterns": {
+                "type": "string",
+                "description": "通配符前缀模式，逗号分隔，如 '3*.SZ,6*.SH'（最多3个）。",
+            },
+            "fields": {
+                "type": "string",
+                "description": "要返回的字段，逗号分隔（可选）。",
+            },
+            "max_rows": {
+                "type": "integer",
+                "description": "每个标的返回的最大行数（默认500，0=不限制）。",
+                "default": 500,
+            },
+        },
+        "required": [],
+    }
+    is_readonly = True
+
+    def execute(self, **kwargs: Any) -> str:
+        return get_realtime_quotes(**kwargs)

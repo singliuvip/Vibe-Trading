@@ -598,6 +598,7 @@ class FeishuChannel(BaseChannel):
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()  # Ordered dedup cache
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream_bufs: dict[str, _FeishuStreamBuf] = {}
+        self._reasoning_bufs: dict[str, _FeishuStreamBuf] = {}  # reasoning stream buffers
         self._bot_open_id: str | None = None
         self._background_tasks: set[asyncio.Task] = set()
         self._reaction_ids: dict[str, str] = {}  # message_id → reaction_id
@@ -1954,6 +1955,208 @@ class FeishuChannel(BaseChannel):
                     buf.sequence,
                 )
                 buf.card_id = None
+
+    # ── Reasoning streaming ────────────────────────────────────────────
+
+    @staticmethod
+    def _reasoning_stream_key(chat_id: str, metadata: dict[str, Any] | None = None) -> str:
+        """Scope reasoning stream buffers separately from response streaming."""
+        meta = metadata or {}
+        return f"reasoning:{meta.get('message_id') or chat_id}"
+
+    async def send_reasoning_delta(
+        self,
+        chat_id: str,
+        delta: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Progressive streaming of model reasoning via CardKit.
+
+        Reasoning content is displayed in its own streaming card with a
+        ``🤔 Thinking...`` header, separate from the main response card.
+        When ``_reasoning_end`` arrives via :meth:`send_reasoning_end` the
+        card is finalised and streaming mode is closed so the reasoning
+        stays visible in the chat history.
+        """
+        if not self._client or not delta:
+            return
+        meta = metadata or {}
+        stream_key = self._reasoning_stream_key(chat_id, meta)
+        loop = asyncio.get_running_loop()
+        rid_type = "chat_id" if chat_id.startswith("oc_") else "open_id"
+
+        buf = self._reasoning_bufs.get(stream_key)
+        if buf is None:
+            buf = _FeishuStreamBuf()
+            self._reasoning_bufs[stream_key] = buf
+        buf.text += delta
+        if not buf.text.strip():
+            return
+
+        now = time.monotonic()
+        if buf.card_id is None:
+            # Create a streaming card with a thinking header
+            card_id = await loop.run_in_executor(
+                None,
+                self._create_reasoning_streaming_card_sync,
+                rid_type,
+                chat_id,
+            )
+            if card_id:
+                ok, sequence = await loop.run_in_executor(
+                    None, self._stream_update_text_with_reopen_sync, card_id, buf.text, 1
+                )
+                if ok:
+                    buf.card_id = card_id
+                    buf.sequence = sequence
+                    buf.last_edit = now
+                else:
+                    await loop.run_in_executor(
+                        None, self._close_streaming_mode_sync, card_id, sequence + 1
+                    )
+        elif (now - buf.last_edit) >= self._STREAM_EDIT_INTERVAL:
+            ok, buf.sequence = await loop.run_in_executor(
+                None,
+                self._stream_update_text_with_reopen_sync,
+                buf.card_id,
+                buf.text,
+                buf.sequence + 1,
+            )
+            if ok:
+                buf.last_edit = now
+            else:
+                buf.sequence += 1
+                await loop.run_in_executor(
+                    None,
+                    self._close_streaming_mode_sync,
+                    buf.card_id,
+                    buf.sequence,
+                )
+                buf.card_id = None
+
+    def _create_reasoning_streaming_card_sync(
+        self,
+        receive_id_type: str,
+        chat_id: str,
+    ) -> str | None:
+        """Create a CardKit streaming card for reasoning content.
+
+        The card has a fixed ``🤔 Thinking...`` header div followed by a
+        streaming markdown element, so users see the thinking indicator
+        immediately even before any content arrives.
+        """
+        from lark_oapi.api.cardkit.v1 import CreateCardRequest, CreateCardRequestBody
+
+        card_json = {
+            "schema": "2.0",
+            "config": {"wide_screen_mode": True, "update_multi": True, "streaming_mode": True},
+            "body": {
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {"tag": "lark_md", "content": "**🤔 Thinking...**"},
+                    },
+                    {"tag": "markdown", "content": "", "element_id": _STREAM_ELEMENT_ID},
+                ]
+            },
+        }
+        try:
+            request = (
+                CreateCardRequest.builder()
+                .request_body(
+                    CreateCardRequestBody.builder()
+                    .type("card_json")
+                    .data(json.dumps(card_json, ensure_ascii=False))
+                    .build()
+                )
+                .build()
+            )
+            response = self._client.cardkit.v1.card.create(request)
+            if not response.success():
+                self.logger.warning(
+                    "Failed to create reasoning streaming card: code={}, msg={}",
+                    response.code, response.msg,
+                )
+                return None
+            card_id = getattr(response.data, "card_id", None)
+            if card_id:
+                card_content = json.dumps(
+                    {"type": "card", "data": {"card_id": card_id}}, ensure_ascii=False
+                )
+                sent = self._send_message_sync(receive_id_type, chat_id, "interactive", card_content)
+                if sent:
+                    return card_id
+                self.logger.warning(
+                    "Created reasoning streaming card {} but failed to send it to {}",
+                    card_id, chat_id,
+                )
+            return None
+        except Exception as e:
+            self.logger.warning("Error creating reasoning streaming card: {}", e)
+            return None
+
+    async def send_reasoning_end(
+        self,
+        chat_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Finalise and close the reasoning streaming card.
+
+        The reasoning content remains visible in the chat; streaming mode
+        is turned off so the card preview in the chat list is not stuck
+        in a generating state.
+        """
+        if not self._client:
+            return
+        meta = metadata or {}
+        stream_key = self._reasoning_stream_key(chat_id, meta)
+        loop = asyncio.get_running_loop()
+
+        buf = self._reasoning_bufs.pop(stream_key, None)
+        if not buf or not buf.text:
+            return
+
+        if buf.card_id:
+            buf.sequence += 1
+            ok, buf.sequence = await loop.run_in_executor(
+                None,
+                self._stream_update_text_with_reopen_sync,
+                buf.card_id,
+                buf.text,
+                buf.sequence,
+            )
+            if ok:
+                buf.sequence += 1
+                # Close streaming mode so the chat preview exits the
+                # generating placeholder and the reasoning stays visible.
+                closed = await loop.run_in_executor(
+                    None,
+                    self._close_streaming_mode_sync,
+                    buf.card_id,
+                    buf.sequence,
+                )
+                if not closed:
+                    buf.sequence += 1
+                    await loop.run_in_executor(
+                        None,
+                        self._close_streaming_mode_sync,
+                        buf.card_id,
+                        buf.sequence,
+                    )
+                self.logger.debug("Reasoning streaming ended for {}", stream_key)
+                return
+
+            buf.sequence += 1
+            await loop.run_in_executor(
+                None,
+                self._close_streaming_mode_sync,
+                buf.card_id,
+                buf.sequence,
+            )
+            self.logger.warning(
+                "Reasoning card {} final update failed, closing streaming mode",
+                buf.card_id,
+            )
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Feishu, including media (images/files) if present."""

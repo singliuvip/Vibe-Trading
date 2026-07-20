@@ -12,6 +12,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from src.agent.tools import BaseTool
+
 logger = logging.getLogger(__name__)
 
 
@@ -84,3 +86,49 @@ def get_auction_data(
             ensure_ascii=False,
             indent=2,
         )
+
+
+class TushareAuctionTool(BaseTool):
+    """BaseTool adapter for get_auction_data."""
+    name = "get_auction_data"
+    description = get_auction_data.__doc__
+    parameters = {
+        "type": "object",
+        "properties": {
+            "session": {
+                "type": "string",
+                "enum": ["current", "open", "close"],
+                "description": "竞价时段：current(当日竞价)、open(开盘竞价历史)、close(收盘竞价历史)。",
+            },
+            "codes": {
+                "type": "string",
+                "description": "逗号分隔的股票代码列表，如 '000001.SZ,600519.SH'（最多50个）。",
+            },
+            "trade_date": {
+                "type": "string",
+                "description": "交易日期 YYYYMMDD（默认今天）。",
+            },
+            "start_date": {
+                "type": "string",
+                "description": "起始日期 YYYYMMDD（历史查询）。",
+            },
+            "end_date": {
+                "type": "string",
+                "description": "结束日期 YYYYMMDD（历史查询）。",
+            },
+            "max_rows": {
+                "type": "integer",
+                "description": "每个标的返回的最大行数（默认500，0=不限制）。",
+                "default": 500,
+            },
+            "fields": {
+                "type": "string",
+                "description": "要返回的字段（逗号分隔，可选，透传到 Tushare）。",
+            },
+        },
+        "required": ["session"],
+    }
+    is_readonly = True
+
+    def execute(self, **kwargs: Any) -> str:
+        return get_auction_data(**kwargs)

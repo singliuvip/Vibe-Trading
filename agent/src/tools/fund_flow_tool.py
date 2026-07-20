@@ -258,6 +258,13 @@ class FundFlowTool(BaseTool):
         Tushare's moneyflow returns full rows per ts_code x trade_date.
         We filter client-side for daily period and cap rows.
         """
+        # Tushare moneyflow only supports daily frequency
+        if period != "daily":
+            return _error(
+                "Tushare moneyflow only supports period='daily'. "
+                "Use period='daily' or source='eastmoney' for minute-level data."
+            )
+
         from backtest.loaders.tushare_featured import TushareFeaturedProvider
 
         try:
@@ -276,6 +283,10 @@ class FundFlowTool(BaseTool):
                 raw = code.rpartition(".")[0].upper() + "." + code.rpartition(".")[2].upper()
                 # Tushare moneyflow always returns daily data
                 envelope = provider.fetch_moneyflow(ts_code=raw)
+                # Check for Tushare API-level errors
+                if envelope.get("error"):
+                    results[code] = {"symbol": code, "error": f"Tushare API error: {envelope['error']}"}
+                    continue
                 rows = envelope.get("data", [])
                 # Ensure newest-first by trade_date
                 rows = sorted(rows, key=lambda r: str(r.get("trade_date", "")), reverse=True)
@@ -296,7 +307,7 @@ class FundFlowTool(BaseTool):
             "ok": True,
             "market": "stock",
             "source": "tushare",
-            "period": period,
+            "period": "daily",
             "buckets": list(_BUCKETS),
             "data": results,
         }

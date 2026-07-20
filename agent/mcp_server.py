@@ -1558,17 +1558,56 @@ async def get_featured_data(
     ann_date: str = "",
     month: str = "",
     indicator: str = "",
+    name: str = "",
+    hm_name: str = "",
+    tag: str = "",
+    con_code: str = "",
+    hot_type: str = "",
+    is_new: str = "",
+    idx_type: str = "",
+    nums: str = "",
+    exchange_id: str = "",
+    start_month: str = "",
+    end_month: str = "",
 ) -> str:
     """查询 Tushare 特色数据（需要相应特权）。
 
-    支持十六种数据类型：
+    支持四十一种数据类型：
+
+    P0 — 筹码/涨跌停/热榜/技术因子/游资/连板：
     - ``kind="cyq_perf"``：每日筹码及胜率（筹码成本、加权平均成本、胜率）。
     - ``kind="cyq_chips"``：每日筹码分布（各价格区间的持仓量）。
     - ``kind="limit_list"``：涨跌停榜单（含封单、炸板、连板信息）。
     - ``kind="ths_hot"``：同花顺热榜（个股/概念/ETF/转债热度排名）。
+    - ``kind="stk_factor_pro"``：股票技术面因子（专业版）。
+    - ``kind="hm_list"``：游资名录。
+    - ``kind="hm_detail"``：游资每日交易明细。
+    - ``kind="limit_list_ths"``：同花顺涨跌停榜单（完整版）。
+    - ``kind="limit_step"``：连板天梯。
+
+    P1 — 资金流向/龙虎榜/融资融券/板块/流通/热点/开盘啦/通达信/涨停统计：
+    - ``kind="moneyflow"``：个股资金流向（小单/中单/大单/超大单买卖）。
+    - ``kind="top_list"``：龙虎榜每日明细（营业部买卖席位）。
+    - ``kind="margin_detail"``：融资融券每日明细（融资余额/融券余量）。
     - ``kind="ths_index"``：同花顺概念板块列表（概念/行业/地域）。
     - ``kind="ths_member"``：同花顺概念板块成分股。
     - ``kind="share_float"``：解禁/流通股本（流通股本、自由流通股本、总股本）。
+    - ``kind="dc_hot"``：东方财富热榜。
+    - ``kind="kpl_list"``：开盘啦榜单。
+    - ``kind="kpl_concept_cons"``：开盘啦题材成分。
+    - ``kind="ths_daily"``：同花顺板块行情。
+    - ``kind="dc_daily"``：东方财富板块行情。
+    - ``kind="pledge_detail"``：股权质押明细（必填 ts_code）。
+    - ``kind="margin"``：融资融券汇总。
+    - ``kind="margin_secs"``：融资融券标的列表。
+    - ``kind="dc_index"``：东方财富概念板块。
+    - ``kind="dc_member"``：东方财富板块成分（必填 ts_code）。
+    - ``kind="tdx_index"``：通达信板块信息。
+    - ``kind="tdx_member"``：通达信板块成分（必填 ts_code）。
+    - ``kind="tdx_daily"``：通达信板块行情。
+    - ``kind="limit_cpt_list"``：涨停最强板块统计。
+
+    P2 — 质押/回购/增减持/ST/沪深港通/调研/金股/宏观/预测/龙虎榜机构/因子：
     - ``kind="pledge_stat"``：股权质押统计（质押比例、质押股数）。
     - ``kind="repurchase"``：股票回购（回购股数、金额、价格区间）。
     - ``kind="holdertrade"``：股东增减持（变动数量、变动比例）。
@@ -1576,29 +1615,36 @@ async def get_featured_data(
     - ``kind="hsgt_stocks"``：沪港通标的列表（买卖金额）。
     - ``kind="stk_surv"``：机构调研（调研机构、调研内容）。
     - ``kind="broker_recommend"``：券商金股（月度推荐金股及理由）。
-    - ``kind="cn_macro"``：中国宏观经济（GDP/CPI/PPI/Shibor）。
+    - ``kind="cn_macro"``：中国宏观经济（GDP/CPI/PPI/Shibor/PMI/货币供应/社融/LPR）。
     - ``kind="forecast"``：盈利预测（机构预测+业绩预告）。
+    - ``kind="top_inst"``：龙虎榜机构交易明细。
+    - ``kind="idx_factor_pro"``：指数专业因子。
+    - ``kind="fund_factor_pro"``：场内基金专业因子。
 
     Args:
-        kind: 数据类型 — "cyq_perf"（筹码胜率）、"cyq_chips"（筹码分布）、
-            "limit_list"（涨跌停榜单）、"ths_hot"（热榜）、
-            "ths_index"（概念板块列表）、"ths_member"（概念板块成分）、
-            "share_float"（解禁/流通股本）、"pledge_stat"（股权质押统计）、
-            "repurchase"（股票回购）、"holdertrade"（股东增减持）、
-            "stock_st"（ST列表）、"hsgt_stocks"（沪港通标的）、
-            "stk_surv"（机构调研）、"broker_recommend"（券商金股）、
-            "cn_macro"（中国宏观）、"forecast"（盈利预测）。
+        kind: 数据类型，详见上方列表。
         ts_code: 股票/板块代码（如 000001.SZ 或 883900.TI），空字符串=全市场/全部。
         trade_date: 交易日期 YYYYMMDD。
         start_date: 起始日期 YYYYMMDD。
         end_date: 结束日期 YYYYMMDD。
-        limit_type: 仅 limit_list：U(涨停)/D(跌停)/Z(炸板)，空字符串=全部。
-        market: 仅 ths_hot：A(A股)/HK(港股)，空字符串=全部。
-        exchange: 仅 ths_index：交易所代码，空字符串=全部。
-        type: 仅 ths_index：板块类型 N(概念)/I(行业)/R(地域)，空字符串=全部。
+        limit_type: limit_list(U/D/Z) 或 limit_list_ths(涨停池/连板池/冲刺涨停/炸板池/跌停池)。
+        market: ths_hot(A/HK) 或 dc_hot 或 limit_list_ths(HS/GEM/STAR)。
+        exchange: ths_index 交易所代码，或 margin_secs(SSE/SZSE/BSE)。
+        type: ths_index 板块类型 N(概念)/I(行业)/R(地域)。
         ann_date: 公告日期 YYYYMMDD，用于 pledge_stat / repurchase / holdertrade。
         month: 月份 YYYYMM，用于 broker_recommend（券商金股）。
-        indicator: 宏观指标，仅 cn_macro：gdp/cpi/ppi/shibor。
+        indicator: 宏观指标，仅 cn_macro：gdp/cpi/ppi/shibor/pmi/money_supply/social_financing/lpr。
+        name: 游资名称模糊查询，仅 hm_list。
+        hm_name: 游资名称，仅 hm_detail。
+        tag: 标签，仅 kpl_list。
+        con_code: 股票代码，仅 kpl_concept_cons。
+        hot_type: 热榜类型，仅 dc_hot。
+        is_new: Y/N，仅 dc_hot。
+        idx_type: 板块类型，仅 dc_daily。
+        nums: 连板天数，仅 limit_step。
+        exchange_id: SSE/SZSE/BSE，仅 margin。
+        start_month: 起始月份 YYYYMM，用于 cn_pmi/cn_m/sf_month（由 cn_macro 内部路由）。
+        end_month: 结束月份 YYYYMM，用于 cn_pmi/cn_m/sf_month（由 cn_macro 内部路由）。
     """
     from src.tools.tushare_featured_tool import get_featured_data as _tool
 
@@ -1615,6 +1661,17 @@ async def get_featured_data(
         ann_date=ann_date,
         month=month,
         indicator=indicator,
+        name=name,
+        hm_name=hm_name,
+        tag=tag,
+        con_code=con_code,
+        hot_type=hot_type,
+        is_new=is_new,
+        idx_type=idx_type,
+        nums=nums,
+        exchange_id=exchange_id,
+        start_month=start_month,
+        end_month=end_month,
     )
 
 

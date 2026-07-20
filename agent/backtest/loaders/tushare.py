@@ -1,6 +1,8 @@
-"""Tushare loader for A-share daily and intraday bars plus optional fundamentals.
+"""Tushare loader for A-share daily, weekly, monthly and intraday bars plus optional fundamentals.
 
-Supports ``interval``: 1D (default) / 1m / 5m / 15m / 30m / 1H.
+Supports ``interval``: 1D (default) / 1W / 1M / 1m / 5m / 15m / 30m / 1H.
+Weekly/monthly uses ``pro.weekly()`` / ``pro.monthly()`` or
+``pro.index_weekly()`` / ``pro.index_monthly()`` for indices.
 Minute data uses ``pro.stk_mins()`` (Tushare points >= 2000).
 """
 
@@ -49,7 +51,10 @@ def _is_crypto(code: str) -> bool:
 
 @register
 class DataLoader:
-    """Tushare-backed OHLCV loader."""
+    """Tushare-backed OHLCV loader.
+
+    Supports ``interval``: 1D (default) / 1W / 1M / 1m / 5m / 15m / 30m / 1H.
+    """
 
     name = "tushare"
     markets = {"a_share", "futures", "fund"}
@@ -86,12 +91,15 @@ class DataLoader:
             start_date: Start date (YYYY-MM-DD).
             end_date: End date (YYYY-MM-DD).
             fields: Extra fundamental columns (daily only).
-            interval: Bar size (1D/1m/5m/15m/30m/1H), default ``1D``.
+            interval: Bar size (1D/1W/1M/1m/5m/15m/30m/1H), default ``1D``.
 
         Returns:
             Mapping code -> OHLCV DataFrame.
         """
         validate_date_range(start_date, end_date)
+
+        if interval in {"1W", "1M"}:
+            return self._fetch_periods(codes, start_date, end_date, interval)
 
         if interval != "1D":
             return self._fetch_minutes(codes, start_date, end_date, interval)
@@ -286,4 +294,93 @@ class DataLoader:
                 result[code] = ohlcv
             except Exception as exc:
                 logger.warning("failed to fetch minute data %s: %s", code, exc)
+        return result
+
+    def _fetch_periods(
+        self,
+        codes: List[str],
+        start_date: str,
+        end_date: str,
+        interval: str,
+    ) -> Dict[str, pd.DataFrame]:
+        """Fetch weekly or monthly bars via Tushare API.
+
+        证券类型分流:
+        - A股股票 → self.api.weekly() / self.api.monthly()
+        - 指数(000xxx.SH/399xxx.SZ) → self.api.index_weekly() / self.api.index_monthly()
+        - ETF/LOF → 跳过并 warning
+        - 港股 → 跳过并 warning
+        - 美股/加密资产 → 跳过并 warning
+
+        标准化流程与日线一致:
+        1. 按 trade_date 升序排序
+        2. 转换为 DatetimeIndex
+        3. vol 重命名为 volume
+        4. OHLCV 转为数值类型
+        5. 返回固定 open/high/low/close/volume 列
+        """
+        sd = start_date.replace("-", "")
+        ed = end_date.replace("-", "")
+        is_weekly = interval == "1W"
+        result: Dict[str, pd.DataFrame] = {}
+
+        for code in codes:
+            def _fetch_one_period(code: str = code) -> Optional[pd.DataFrame]:
+                try:
+                    if _is_etf_listed(code):
+                        logger.warning(
+                            "tushare does not support %s data for %s (ETF); skipping",
+                            interval, code,
+                        )
+                        return None
+                    if _is_index(code):
+                        api_method = (
+                            self.api.index_weekly if is_weekly
+                            else self.api.index_monthly
+                        )
+                    elif _is_hk_equity(code) or _is_us_equity(code) or _is_crypto(code):
+                        logger.warning(
+                            "tushare does not support %s data for %s; skipping",
+                            interval, code,
+                        )
+                        return None
+                    else:
+                        api_method = (
+                            self.api.weekly if is_weekly
+                            else self.api.monthly
+                        )
+
+                    df = api_method(ts_code=code, start_date=sd, end_date=ed)
+                    if df is None or df.empty:
+                        return None
+                    df = df.sort_values("trade_date")
+                    df["trade_date"] = pd.to_datetime(df["trade_date"])
+                    df = df.set_index("trade_date")
+                    df = df.rename(columns={"vol": "volume"})
+                    for col in ["open", "high", "low", "close", "volume"]:
+                        if col in df.columns:
+                            df[col] = pd.to_numeric(df[col], errors="coerce")
+                    ohlcv = df[["open", "high", "low", "close", "volume"]].dropna(
+                        subset=["open", "high", "low", "close"]
+                    )
+                    return ohlcv
+                except Exception as exc:
+                    logger.warning(
+                        "failed to fetch %s data for %s: %s",
+                        interval, code, exc,
+                    )
+                    return None
+
+            df = cached_loader_fetch(
+                source=self.name,
+                symbol=code,
+                timeframe=interval,
+                start_date=start_date,
+                end_date=end_date,
+                fields=[],
+                fetch=_fetch_one_period,
+            )
+            if df is not None and not df.empty:
+                result[code] = df
+
         return result

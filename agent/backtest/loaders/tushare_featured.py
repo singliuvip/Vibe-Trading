@@ -1,9 +1,15 @@
-"""Tushare featured data provider (19 endpoints).
+"""Tushare featured data provider (42 endpoints).
 
 Wraps ``ts.pro_api()`` for: cyq_perf, cyq_chips, limit_list, ths_hot,
 moneyflow, top_list, margin_detail, ths_index, ths_member, share_float,
 pledge_stat, repurchase, holdertrade, stock_st, hsgt_stocks, stk_surv,
-broker_recommend, cn_macro (gdp/cpi/ppi/shibor), forecast.
+broker_recommend, cn_macro (gdp/cpi/ppi/shibor/pmi/money_supply/
+social_financing/lpr), forecast,
+stk_factor_pro, hm_list, hm_detail, limit_list_ths, limit_step,
+dc_hot, kpl_list, kpl_concept_cons, ths_daily, dc_daily,
+pledge_detail, margin, margin_secs, cn_pmi, cn_m, sf_month,
+shibor_lpr, top_inst, idx_factor_pro, fund_factor_pro,
+dc_index, dc_member, tdx_index, tdx_member, tdx_daily, limit_cpt_list.
 Requires the corresponding Tushare privileges.
 No disk cache is written — data is always fetched live from Tushare.
 """
@@ -26,18 +32,27 @@ _VALID_THS_HOT_MARKETS = frozenset({"A", "HK", ""})
 
 
 class TushareFeaturedProvider:
-    """Provider for Tushare featured data (19 endpoints).
+    """Provider for Tushare featured data (42 endpoints).
 
-    P0 — chip distribution / limit boards / hot rank:
-      ``cyq_perf``, ``cyq_chips``, ``limit_list_d``, ``ths_hot``
-    P1 — fund flow / dragon-tiger / margin / sector / share float:
+    P0 — chip / limit / hot / technical factors / hot money / ladder:
+      ``cyq_perf``, ``cyq_chips``, ``limit_list_d``, ``ths_hot``,
+      ``stk_factor_pro``, ``hm_list``, ``hm_detail``, ``limit_list_ths``,
+      ``limit_step``
+    P1 — fund flow / dragon-tiger / margin / sector / share float / hot boards:
       ``moneyflow``, ``top_list``, ``margin_detail``, ``ths_index``,
-      ``ths_member``, ``share_float``
+      ``ths_member``, ``share_float``, ``dc_hot``, ``kpl_list``,
+      ``kpl_concept_cons``, ``ths_daily``, ``dc_daily``, ``pledge_detail``,
+      ``margin``, ``margin_secs``, ``dc_index``, ``dc_member``,
+      ``tdx_index``, ``tdx_member``, ``tdx_daily``
     P2 — pledge / repurchase / holder trade / ST / HSGT / survey /
-          broker picks / macro / forecast:
+          broker picks / macro / forecast / top inst / index & fund factors /
+          limit concept:
       ``pledge_stat``, ``repurchase``, ``holdertrade``, ``stock_st``,
       ``hsgt_stocks``, ``stk_surv``, ``broker_recommend``, ``cn_macro``
-      (gdp/cpi/ppi/shibor), ``forecast`` (report_rc + forecast fallback)
+      (gdp/cpi/ppi/shibor/pmi/money_supply/social_financing/lpr),
+      ``forecast`` (report_rc + forecast fallback), ``cn_pmi``,
+      ``cn_m``, ``sf_month``, ``shibor_lpr``, ``top_inst``,
+      ``idx_factor_pro``, ``fund_factor_pro``, ``limit_cpt_list``
     """
 
     name = "tushare_featured"
@@ -685,7 +700,7 @@ class TushareFeaturedProvider:
             Envelope with data list containing ts_code, name,
             market, buy_amount, sell_amount 等.
         """
-        endpoint = "hsgt_stocks"
+        endpoint = "stock_hsgt"
 
         try:
             kwargs: dict[str, Any] = {}
@@ -693,7 +708,7 @@ class TushareFeaturedProvider:
                 kwargs["trade_date"] = trade_date
             df = self._pro.stock_hsgt(**kwargs)
         except Exception as exc:
-            logger.exception("hsgt_stocks call failed")
+            logger.exception("stock_hsgt call failed")
             return self._make_error_envelope(endpoint, str(exc))
 
         rows = self._rows_from_frame(df)
@@ -768,14 +783,18 @@ class TushareFeaturedProvider:
     def fetch_cn_macro(
         self,
         indicator: str = "",
+        trade_date: str = "",
         start_date: str = "",
         end_date: str = "",
+        start_month: str = "",
+        end_month: str = "",
     ) -> dict[str, Any]:
         """中国宏观经济。根据 indicator 路由到对应 Tushare 端点。
 
         Args:
-            indicator: 指标类型 — "gdp" / "cpi" / "ppi" / "shibor"。
-            start_date: 起始日期 YYYYMMDD。
+            indicator: 指标类型 — "gdp" / "cpi" / "ppi" / "shibor" /
+                "pmi" / "money_supply" / "social_financing" / "lpr"。
+            start_date: 起始日期 YYYYMMDD（pmi/money_supply/social_financing 映射为 YYYYMM）。
             end_date: 结束日期 YYYYMMDD。
 
         Returns:
@@ -786,30 +805,60 @@ class TushareFeaturedProvider:
             "cpi": ("cn_cpi", "cn_cpi"),
             "ppi": ("cn_ppi", "cn_ppi"),
             "shibor": ("shibor", "shibor"),
+            "pmi": ("fetch_cn_pmi", "cn_pmi"),
+            "money_supply": ("fetch_cn_m", "cn_m"),
+            "social_financing": ("fetch_sf_month", "sf_month"),
+            "lpr": ("fetch_shibor_lpr", "shibor_lpr"),
         }
+
+        # Indicators that use month-based parameters (YYYYMM)
+        _MONTH_INDICATORS = frozenset({"pmi", "money_supply", "social_financing"})
 
         if not indicator:
             return self._make_error_envelope(
                 "cn_macro",
-                "indicator is required for cn_macro. Must be one of: gdp, cpi, ppi, shibor.",
+                "indicator is required for cn_macro. Must be one of: "
+                "gdp, cpi, ppi, shibor, pmi, money_supply, social_financing, lpr.",
             )
 
         indicator = indicator.strip().lower()
         if indicator not in endpoint_map:
             return self._make_error_envelope(
                 "cn_macro",
-                f"Invalid indicator: {indicator!r}. Must be one of: gdp, cpi, ppi, shibor.",
+                f"Invalid indicator: {indicator!r}. Must be one of: "
+                "gdp, cpi, ppi, shibor, pmi, money_supply, social_financing, lpr.",
             )
 
         tushare_method, endpoint = endpoint_map[indicator]
 
         try:
             kwargs: dict[str, Any] = {}
-            if start_date:
-                kwargs["start_date"] = start_date
-            if end_date:
-                kwargs["end_date"] = end_date
-            df = getattr(self._pro, tushare_method)(**kwargs)
+            # LPR 支持单日期查询
+            if indicator == "lpr" and trade_date:
+                kwargs["trade_date"] = trade_date
+            if indicator in _MONTH_INDICATORS:
+                # 月份类端点：优先使用显式的 start_month/end_month
+                if start_month:
+                    kwargs["start_month"] = start_month
+                elif start_date:
+                    kwargs["start_month"] = start_date
+                if end_month:
+                    kwargs["end_month"] = end_month
+                elif end_date:
+                    kwargs["end_month"] = end_date
+            else:
+                if start_date:
+                    kwargs["start_date"] = start_date
+                if end_date:
+                    kwargs["end_date"] = end_date
+
+            # 新指标通过 self.fetch_* 方法调用（自带参数映射），
+            # 旧指标直接通过 self._pro.* 调用
+            if tushare_method.startswith("fetch_"):
+                df = getattr(self, tushare_method)(**kwargs)
+                return df  # fetch_* 方法已返回 envelope
+            else:
+                df = getattr(self._pro, tushare_method)(**kwargs)
         except Exception as exc:
             logger.exception("%s call failed", tushare_method)
             return self._make_error_envelope(endpoint, str(exc))
@@ -861,6 +910,1078 @@ class TushareFeaturedProvider:
             df = self._pro.forecast(**kwargs)
         except Exception as exc:
             logger.exception("forecast call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_report_rc(
+        self,
+        ts_code: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """机构预测（独立）。pro.report_rc(...)
+
+        Args:
+            ts_code: 股票代码（如 000001.SZ），空字符串=全市场。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "report_rc"
+        kwargs: dict[str, Any] = {}
+        if ts_code:
+            kwargs["ts_code"] = ts_code
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        try:
+            df = self._pro.report_rc(**kwargs)
+        except Exception as exc:
+            logger.exception("report_rc call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_forecast_only(
+        self,
+        ts_code: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """业绩预告（独立）。pro.forecast(...)
+
+        Args:
+            ts_code: 股票代码（如 000001.SZ），空字符串=全市场。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "forecast_only"
+        kwargs: dict[str, Any] = {}
+        if ts_code:
+            kwargs["ts_code"] = ts_code
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        try:
+            df = self._pro.forecast(**kwargs)
+        except Exception as exc:
+            logger.exception("forecast call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    # ------------------------------------------------------------------
+    # P0 (new): stk_factor_pro / hm_list / hm_detail / limit_list_ths / limit_step
+    # ------------------------------------------------------------------
+
+    def fetch_stk_factor_pro(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """股票技术面因子（专业版）。pro.stk_factor_pro(...)
+
+        Args:
+            ts_code: 股票代码（如 000001.SZ），空字符串=全市场。
+            trade_date: 交易日期 YYYYMMDD。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "stk_factor_pro"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            df = self._pro.stk_factor_pro(**kwargs)
+        except Exception as exc:
+            logger.exception("stk_factor_pro call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_hm_list(
+        self,
+        name: str = "",
+    ) -> dict[str, Any]:
+        """游资名录。pro.hm_list(...)
+
+        Args:
+            name: 游资名称（模糊查询），空字符串=全部。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "hm_list"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if name:
+                kwargs["name"] = name
+            df = self._pro.hm_list(**kwargs)
+        except Exception as exc:
+            logger.exception("hm_list call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_hm_detail(
+        self,
+        trade_date: str = "",
+        ts_code: str = "",
+        hm_name: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """游资每日交易明细。pro.hm_detail(...)
+
+        Args:
+            trade_date: 交易日期 YYYYMMDD。
+            ts_code: 股票代码（如 000001.SZ）。
+            hm_name: 游资名称。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "hm_detail"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if hm_name:
+                kwargs["hm_name"] = hm_name
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            df = self._pro.hm_detail(**kwargs)
+        except Exception as exc:
+            logger.exception("hm_detail call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    # Valid limit_type values for limit_list_ths
+    _VALID_LIMIT_TYPES_THS = frozenset({
+        "涨停池", "连板池", "连扳池", "冲刺涨停", "炸板池", "跌停池", "",
+    })
+
+    # Valid market values for limit_list_ths
+    _VALID_LIMIT_THS_MARKETS = frozenset({"HS", "GEM", "STAR", ""})
+
+    def fetch_limit_list_ths(
+        self,
+        trade_date: str = "",
+        ts_code: str = "",
+        limit_type: str = "",
+        market: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """同花顺涨跌停榜单（完整版）。pro.limit_list_ths(...)
+
+        Args:
+            trade_date: 交易日期 YYYYMMDD。
+            ts_code: 股票代码（如 000001.SZ）。
+            limit_type: 涨停池/连板池/连扳池/冲刺涨停/炸板池/跌停池，空字符串=全部。
+            market: HS/GEM/STAR，空字符串=全部。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "limit_list_ths"
+
+        if limit_type and limit_type not in self._VALID_LIMIT_TYPES_THS:
+            return self._make_error_envelope(
+                endpoint,
+                f"Invalid limit_type: {limit_type!r}. Must be one of "
+                f"{sorted(t for t in self._VALID_LIMIT_TYPES_THS if t)} or empty string.",
+            )
+        if market and market not in self._VALID_LIMIT_THS_MARKETS:
+            return self._make_error_envelope(
+                endpoint,
+                f"Invalid market: {market!r}. Must be one of "
+                f"{sorted(t for t in self._VALID_LIMIT_THS_MARKETS if t)} or empty string.",
+            )
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if limit_type:
+                kwargs["limit_type"] = limit_type
+            if market:
+                kwargs["market"] = market
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            df = self._pro.limit_list_ths(**kwargs)
+        except Exception as exc:
+            logger.exception("limit_list_ths call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_limit_step(
+        self,
+        trade_date: str = "",
+        ts_code: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        nums: str = "",
+    ) -> dict[str, Any]:
+        """连板天梯。pro.limit_step(...)
+
+        Args:
+            trade_date: 交易日期 YYYYMMDD。
+            ts_code: 股票代码（如 000001.SZ）。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+            nums: 连板天数。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "limit_step"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            if nums:
+                kwargs["nums"] = nums
+            df = self._pro.limit_step(**kwargs)
+        except Exception as exc:
+            logger.exception("limit_step call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    # ------------------------------------------------------------------
+    # P1 (new): dc_hot / kpl_list / kpl_concept_cons / ths_daily / dc_daily
+    #           pledge_detail / margin / margin_secs
+    # ------------------------------------------------------------------
+
+    def fetch_dc_hot(
+        self,
+        trade_date: str = "",
+        ts_code: str = "",
+        market: str = "",
+        hot_type: str = "",
+        is_new: str = "",
+    ) -> dict[str, Any]:
+        """东方财富热榜。pro.dc_hot(...)
+
+        Args:
+            trade_date: 交易日期 YYYYMMDD。
+            ts_code: 股票代码（如 000001.SZ）。
+            market: 市场类型。
+            hot_type: 热榜类型。
+            is_new: Y/N。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "dc_hot"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if market:
+                kwargs["market"] = market
+            if hot_type:
+                kwargs["hot_type"] = hot_type
+            if is_new:
+                kwargs["is_new"] = is_new
+            df = self._pro.dc_hot(**kwargs)
+        except Exception as exc:
+            logger.exception("dc_hot call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_kpl_list(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        tag: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """开盘啦榜单。pro.kpl_list(...)
+
+        Args:
+            ts_code: 股票代码（如 000001.SZ）。
+            trade_date: 交易日期 YYYYMMDD。
+            tag: 标签。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "kpl_list"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if tag:
+                kwargs["tag"] = tag
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            df = self._pro.kpl_list(**kwargs)
+        except Exception as exc:
+            logger.exception("kpl_list call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_kpl_concept_cons(
+        self,
+        trade_date: str = "",
+        ts_code: str = "",
+        con_code: str = "",
+    ) -> dict[str, Any]:
+        """开盘啦题材成分。pro.kpl_concept_cons(...)
+
+        Args:
+            trade_date: 交易日期 YYYYMMDD。
+            ts_code: 题材代码。
+            con_code: 股票代码。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "kpl_concept_cons"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if con_code:
+                kwargs["con_code"] = con_code
+            df = self._pro.kpl_concept_cons(**kwargs)
+        except Exception as exc:
+            logger.exception("kpl_concept_cons call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_ths_daily(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """同花顺板块行情。pro.ths_daily(...)
+
+        Args:
+            ts_code: 板块代码。
+            trade_date: 交易日期 YYYYMMDD。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "ths_daily"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            df = self._pro.ths_daily(**kwargs)
+        except Exception as exc:
+            logger.exception("ths_daily call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_dc_daily(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        idx_type: str = "",
+    ) -> dict[str, Any]:
+        """东方财富板块行情。pro.dc_daily(...)
+
+        Args:
+            ts_code: 板块代码。
+            trade_date: 交易日期 YYYYMMDD。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+            idx_type: 板块类型。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "dc_daily"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            if idx_type:
+                kwargs["idx_type"] = idx_type
+            df = self._pro.dc_daily(**kwargs)
+        except Exception as exc:
+            logger.exception("dc_daily call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_pledge_detail(
+        self,
+        ts_code: str = "",
+    ) -> dict[str, Any]:
+        """股权质押明细。pro.pledge_detail(ts_code=...)
+
+        ts_code 是必填参数。如果为空则返回错误。
+
+        Args:
+            ts_code: 股票代码（如 000001.SZ），必填。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "pledge_detail"
+
+        if not ts_code.strip():
+            return self._make_error_envelope(
+                endpoint, "ts_code is required for pledge_detail"
+            )
+
+        try:
+            df = self._pro.pledge_detail(ts_code=ts_code)
+        except Exception as exc:
+            logger.exception("pledge_detail call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_margin(
+        self,
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        exchange_id: str = "",
+    ) -> dict[str, Any]:
+        """融资融券汇总。pro.margin(...)
+
+        Args:
+            trade_date: 交易日期 YYYYMMDD。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+            exchange_id: SSE/SZSE/BSE。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "margin"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            if exchange_id:
+                kwargs["exchange_id"] = exchange_id
+            df = self._pro.margin(**kwargs)
+        except Exception as exc:
+            logger.exception("margin call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_margin_secs(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        exchange: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """融资融券标的列表。pro.margin_secs(...)
+
+        Args:
+            ts_code: 股票代码（如 000001.SZ）。
+            trade_date: 交易日期 YYYYMMDD。
+            exchange: SSE/SZSE/BSE。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "margin_secs"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if exchange:
+                kwargs["exchange"] = exchange
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            df = self._pro.margin_secs(**kwargs)
+        except Exception as exc:
+            logger.exception("margin_secs call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    # ------------------------------------------------------------------
+    # P2 (new): cn_pmi / cn_m / sf_month / shibor_lpr / top_inst /
+    #           idx_factor_pro / fund_factor_pro
+    # ------------------------------------------------------------------
+
+    def fetch_cn_pmi(
+        self,
+        month: str = "",
+        start_month: str = "",
+        end_month: str = "",
+    ) -> dict[str, Any]:
+        """中国PMI。pro.cn_pmi(m=month, start_m=start_month, end_m=end_month)
+
+        Args:
+            month: 月份 YYYYMM。
+            start_month: 起始月份 YYYYMM。
+            end_month: 结束月份 YYYYMM。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "cn_pmi"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if month:
+                kwargs["m"] = month
+            if start_month:
+                kwargs["start_m"] = start_month
+            if end_month:
+                kwargs["end_m"] = end_month
+            df = self._pro.cn_pmi(**kwargs)
+        except Exception as exc:
+            logger.exception("cn_pmi call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_cn_m(
+        self,
+        month: str = "",
+        start_month: str = "",
+        end_month: str = "",
+    ) -> dict[str, Any]:
+        """货币供应量。pro.cn_m(m=month, start_m=start_month, end_m=end_month)
+
+        Args:
+            month: 月份 YYYYMM。
+            start_month: 起始月份 YYYYMM。
+            end_month: 结束月份 YYYYMM。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "cn_m"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if month:
+                kwargs["m"] = month
+            if start_month:
+                kwargs["start_m"] = start_month
+            if end_month:
+                kwargs["end_m"] = end_month
+            df = self._pro.cn_m(**kwargs)
+        except Exception as exc:
+            logger.exception("cn_m call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_sf_month(
+        self,
+        month: str = "",
+        start_month: str = "",
+        end_month: str = "",
+    ) -> dict[str, Any]:
+        """社会融资规模。pro.sf_month(m=month, start_m=start_month, end_m=end_month)
+
+        Args:
+            month: 月份 YYYYMM。
+            start_month: 起始月份 YYYYMM。
+            end_month: 结束月份 YYYYMM。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "sf_month"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if month:
+                kwargs["m"] = month
+            if start_month:
+                kwargs["start_m"] = start_month
+            if end_month:
+                kwargs["end_m"] = end_month
+            df = self._pro.sf_month(**kwargs)
+        except Exception as exc:
+            logger.exception("sf_month call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_shibor_lpr(
+        self,
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """LPR。pro.shibor_lpr(date=trade_date, start_date=..., end_date=...)
+
+        Args:
+            trade_date: 日期 YYYYMMDD。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "shibor_lpr"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if trade_date:
+                kwargs["date"] = trade_date
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            df = self._pro.shibor_lpr(**kwargs)
+        except Exception as exc:
+            logger.exception("shibor_lpr call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_top_inst(
+        self,
+        trade_date: str = "",
+        ts_code: str = "",
+    ) -> dict[str, Any]:
+        """龙虎榜机构交易明细。pro.top_inst(...)
+
+        trade_date 是必填参数。
+
+        Args:
+            trade_date: 交易日期 YYYYMMDD，必填。
+            ts_code: 股票代码（如 000001.SZ）。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "top_inst"
+
+        if not trade_date:
+            return self._make_error_envelope(
+                endpoint,
+                "trade_date is required for top_inst",
+            )
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            df = self._pro.top_inst(**kwargs)
+        except Exception as exc:
+            logger.exception("top_inst call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_idx_factor_pro(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """指数专业因子。pro.idx_factor_pro(...)
+
+        Args:
+            ts_code: 指数代码。
+            trade_date: 交易日期 YYYYMMDD。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "idx_factor_pro"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            df = self._pro.idx_factor_pro(**kwargs)
+        except Exception as exc:
+            logger.exception("idx_factor_pro call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_fund_factor_pro(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """场内基金专业因子。pro.fund_factor_pro(...)
+
+        Args:
+            ts_code: 基金代码。
+            trade_date: 交易日期 YYYYMMDD。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "fund_factor_pro"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            df = self._pro.fund_factor_pro(**kwargs)
+        except Exception as exc:
+            logger.exception("fund_factor_pro call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    # ------------------------------------------------------------------
+    # P1 (new): dc_index / dc_member / tdx_index / tdx_member /
+    #           tdx_daily / limit_cpt_list
+    # ------------------------------------------------------------------
+
+    def fetch_dc_index(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        market: str = "",
+    ) -> dict[str, Any]:
+        """东方财富概念板块。pro.dc_index(...)
+
+        Args:
+            ts_code: 板块代码。
+            trade_date: 交易日期 YYYYMMDD。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+            market: 市场类型。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "dc_index"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            if market:
+                kwargs["market"] = market
+            df = self._pro.dc_index(**kwargs)
+        except Exception as exc:
+            logger.exception("dc_index call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_dc_member(
+        self,
+        ts_code: str = "",
+    ) -> dict[str, Any]:
+        """东方财富板块成分。pro.dc_member(ts_code=...)
+
+        ts_code 是必填参数。
+
+        Args:
+            ts_code: 板块代码，必填。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "dc_member"
+
+        if not ts_code.strip():
+            return self._make_error_envelope(
+                endpoint, "ts_code is required for dc_member"
+            )
+
+        try:
+            df = self._pro.dc_member(ts_code=ts_code)
+        except Exception as exc:
+            logger.exception("dc_member call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_tdx_index(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        market: str = "",
+    ) -> dict[str, Any]:
+        """通达信板块信息。pro.tdx_index(...)
+
+        Args:
+            ts_code: 板块代码。
+            trade_date: 交易日期 YYYYMMDD。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+            market: 市场类型。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "tdx_index"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            if market:
+                kwargs["market"] = market
+            df = self._pro.tdx_index(**kwargs)
+        except Exception as exc:
+            logger.exception("tdx_index call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_tdx_member(
+        self,
+        ts_code: str = "",
+    ) -> dict[str, Any]:
+        """通达信板块成分。pro.tdx_member(ts_code=...)
+
+        ts_code 是必填参数。
+
+        Args:
+            ts_code: 板块代码，必填。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "tdx_member"
+
+        if not ts_code.strip():
+            return self._make_error_envelope(
+                endpoint, "ts_code is required for tdx_member"
+            )
+
+        try:
+            df = self._pro.tdx_member(ts_code=ts_code)
+        except Exception as exc:
+            logger.exception("tdx_member call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_tdx_daily(
+        self,
+        ts_code: str = "",
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """通达信板块行情。pro.tdx_daily(...)
+
+        Args:
+            ts_code: 板块代码。
+            trade_date: 交易日期 YYYYMMDD。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "tdx_daily"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if ts_code:
+                kwargs["ts_code"] = ts_code
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            df = self._pro.tdx_daily(**kwargs)
+        except Exception as exc:
+            logger.exception("tdx_daily call failed")
+            return self._make_error_envelope(endpoint, str(exc))
+
+        rows = self._rows_from_frame(df)
+        return self._make_envelope(endpoint, rows)
+
+    def fetch_limit_cpt_list(
+        self,
+        trade_date: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict[str, Any]:
+        """涨停最强板块统计。pro.limit_cpt_list(...)
+
+        Args:
+            trade_date: 交易日期 YYYYMMDD。
+            start_date: 起始日期 YYYYMMDD。
+            end_date: 结束日期 YYYYMMDD。
+
+        Returns:
+            Envelope with data list.
+        """
+        endpoint = "limit_cpt_list"
+
+        try:
+            kwargs: dict[str, Any] = {}
+            if trade_date:
+                kwargs["trade_date"] = trade_date
+            if start_date:
+                kwargs["start_date"] = start_date
+            if end_date:
+                kwargs["end_date"] = end_date
+            df = self._pro.limit_cpt_list(**kwargs)
+        except Exception as exc:
+            logger.exception("limit_cpt_list call failed")
             return self._make_error_envelope(endpoint, str(exc))
 
         rows = self._rows_from_frame(df)

@@ -251,6 +251,9 @@ class MarginTradingTool(BaseTool):
             logger.warning("tushare margin_detail failed for %s: %s", ts_code, exc)
             return _err(f"Tushare margin_detail fetch failed: {exc}")
 
+        # Check for Tushare API-level errors
+        if envelope.get("error"):
+            return _err(f"Tushare API error: {envelope['error']}")
         rows = envelope.get("data", [])
         # Normalize to our expected format
         normalized = [

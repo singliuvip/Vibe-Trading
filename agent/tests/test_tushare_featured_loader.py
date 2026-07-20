@@ -1022,7 +1022,7 @@ class TestFetchHsgtStocks:
             provider = TushareFeaturedProvider()
             result = provider.fetch_hsgt_stocks(trade_date="20240715")
 
-        assert result["endpoint"] == "hsgt_stocks"
+        assert result["endpoint"] == "stock_hsgt"
         assert result["data_source"] == "tushare"
         assert result["is_provisional"] is False
         assert len(result["data"]) == 1
@@ -1038,7 +1038,7 @@ class TestFetchHsgtStocks:
             provider = TushareFeaturedProvider()
             result = provider.fetch_hsgt_stocks()
 
-        assert result["endpoint"] == "hsgt_stocks"
+        assert result["endpoint"] == "stock_hsgt"
         assert result["data"] == []
 
 
@@ -1268,7 +1268,7 @@ class TestFetchCnMacro:
             from backtest.loaders.tushare_featured import TushareFeaturedProvider
 
             provider = TushareFeaturedProvider()
-            result = provider.fetch_cn_macro(indicator="money_supply")
+            result = provider.fetch_cn_macro(indicator="rubbish")
 
         assert "Invalid indicator" in result["error"]
         assert result["data"] == []
@@ -1331,3 +1331,1129 @@ class TestFetchForecast:
         assert result["data_source"] == "tushare"
         assert len(result["data"]) == 1
         assert result["data"][0]["type"] == "预增"
+
+
+# ---------------------------------------------------------------------------
+# P0 (new): fetch_stk_factor_pro
+# ---------------------------------------------------------------------------
+
+
+class TestFetchStkFactorPro:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal stk_factor_pro → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": "20240715",
+                "factor_name": "alpha_001",
+                "factor_value": 1.25,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.stk_factor_pro.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_stk_factor_pro(ts_code="000001.SZ")
+
+        assert result["endpoint"] == "stk_factor_pro"
+        assert result["data_source"] == "tushare"
+        assert result["is_provisional"] is False
+        assert len(result["data"]) == 1
+        assert result["data"][0]["factor_value"] == 1.25
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.stk_factor_pro.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_stk_factor_pro()
+
+        assert result["endpoint"] == "stk_factor_pro"
+        assert result["data"] == []
+
+    def test_exception(self, mock_tushare_token):
+        """API exception → returns error envelope."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.stk_factor_pro.side_effect = RuntimeError("Factor error")
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_stk_factor_pro()
+
+        assert "Factor error" in result["error"]
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P0 (new): fetch_hm_list
+# ---------------------------------------------------------------------------
+
+
+class TestFetchHmList:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal hm_list → returns envelope with data."""
+        df = pd.DataFrame([
+            {"hm_name": "欢乐海岸", "hm_type": "游资", "desc": "深圳欢乐海岸游资"},
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.hm_list.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_hm_list(name="欢乐海岸")
+
+        assert result["endpoint"] == "hm_list"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["hm_name"] == "欢乐海岸"
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.hm_list.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_hm_list()
+
+        assert result["endpoint"] == "hm_list"
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P0 (new): fetch_hm_detail
+# ---------------------------------------------------------------------------
+
+
+class TestFetchHmDetail:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal hm_detail → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "trade_date": "20240715",
+                "ts_code": "000001.SZ",
+                "hm_name": "欢乐海岸",
+                "buy_amount": 5000000.0,
+                "sell_amount": 2000000.0,
+                "net_amount": 3000000.0,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.hm_detail.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_hm_detail(trade_date="20240715")
+
+        assert result["endpoint"] == "hm_detail"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["hm_name"] == "欢乐海岸"
+        assert result["data"][0]["net_amount"] == 3000000.0
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.hm_detail.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_hm_detail()
+
+        assert result["endpoint"] == "hm_detail"
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P0 (new): fetch_limit_list_ths
+# ---------------------------------------------------------------------------
+
+
+class TestFetchLimitListThs:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal limit_list_ths → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "trade_date": "20240715",
+                "ts_code": "000001.SZ",
+                "name": "平安银行",
+                "limit_type": "涨停池",
+                "pct_chg": 10.05,
+                "close": 12.50,
+                "first_limit_date": "20240715",
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.limit_list_ths.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_limit_list_ths(trade_date="20240715")
+
+        assert result["endpoint"] == "limit_list_ths"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["limit_type"] == "涨停池"
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.limit_list_ths.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_limit_list_ths()
+
+        assert result["endpoint"] == "limit_list_ths"
+        assert result["data"] == []
+
+    def test_invalid_limit_type(self, mock_tushare_token):
+        """Invalid limit_type → error envelope."""
+        with patch("tushare.pro_api"):
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_limit_list_ths(limit_type="INVALID")
+
+        assert "Invalid limit_type" in result.get("error", "")
+        assert result["data"] == []
+
+    def test_invalid_market(self, mock_tushare_token):
+        """Invalid market → error envelope."""
+        with patch("tushare.pro_api"):
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_limit_list_ths(market="INVALID")
+
+        assert "Invalid market" in result.get("error", "")
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P0 (new): fetch_limit_step
+# ---------------------------------------------------------------------------
+
+
+class TestFetchLimitStep:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal limit_step → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "trade_date": "20240715",
+                "ts_code": "000001.SZ",
+                "name": "平安银行",
+                "step": 3,
+                "pct_chg": 10.05,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.limit_step.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_limit_step(trade_date="20240715")
+
+        assert result["endpoint"] == "limit_step"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["step"] == 3
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.limit_step.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_limit_step()
+
+        assert result["endpoint"] == "limit_step"
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_dc_hot
+# ---------------------------------------------------------------------------
+
+
+class TestFetchDcHot:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal dc_hot → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "trade_date": "20240715",
+                "ts_code": "000001.SZ",
+                "name": "平安银行",
+                "hot_type": "个股",
+                "hot_score": 9500.0,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.dc_hot.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_dc_hot(trade_date="20240715")
+
+        assert result["endpoint"] == "dc_hot"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["hot_score"] == 9500.0
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.dc_hot.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_dc_hot()
+
+        assert result["endpoint"] == "dc_hot"
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_kpl_list
+# ---------------------------------------------------------------------------
+
+
+class TestFetchKplList:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal kpl_list → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "trade_date": "20240715",
+                "ts_code": "000001.SZ",
+                "name": "平安银行",
+                "tag": "打板",
+                "rank": 1,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.kpl_list.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_kpl_list(trade_date="20240715")
+
+        assert result["endpoint"] == "kpl_list"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["tag"] == "打板"
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.kpl_list.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_kpl_list()
+
+        assert result["endpoint"] == "kpl_list"
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_kpl_concept_cons
+# ---------------------------------------------------------------------------
+
+
+class TestFetchKplConceptCons:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal kpl_concept_cons → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "KPL001",
+                "con_code": "000001.SZ",
+                "name": "平安银行",
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.kpl_concept_cons.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_kpl_concept_cons(ts_code="KPL001")
+
+        assert result["endpoint"] == "kpl_concept_cons"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["con_code"] == "000001.SZ"
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.kpl_concept_cons.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_kpl_concept_cons()
+
+        assert result["endpoint"] == "kpl_concept_cons"
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_ths_daily
+# ---------------------------------------------------------------------------
+
+
+class TestFetchThsDaily:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal ths_daily → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "883900.TI",
+                "trade_date": "20240715",
+                "name": "人工智能",
+                "pct_change": 2.5,
+                "amount": 5000000000.0,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.ths_daily.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_ths_daily(ts_code="883900.TI")
+
+        assert result["endpoint"] == "ths_daily"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["pct_change"] == 2.5
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.ths_daily.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_ths_daily()
+
+        assert result["endpoint"] == "ths_daily"
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_dc_daily
+# ---------------------------------------------------------------------------
+
+
+class TestFetchDcDaily:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal dc_daily → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "BKC112.DC",
+                "trade_date": "20240715",
+                "name": "消费电子",
+                "pct_change": 3.2,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.dc_daily.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_dc_daily(ts_code="BKC112.DC")
+
+        assert result["endpoint"] == "dc_daily"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["pct_change"] == 3.2
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.dc_daily.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_dc_daily()
+
+        assert result["endpoint"] == "dc_daily"
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_pledge_detail
+# ---------------------------------------------------------------------------
+
+
+class TestFetchPledgeDetail:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal pledge_detail → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "000001.SZ",
+                "pledge_date": "20240710",
+                "pledge_amount": 50000000.0,
+                "pledger": "张三",
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.pledge_detail.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_pledge_detail(ts_code="000001.SZ")
+
+        assert result["endpoint"] == "pledge_detail"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["ts_code"] == "000001.SZ"
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.pledge_detail.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_pledge_detail(ts_code="000001.SZ")
+
+        assert result["endpoint"] == "pledge_detail"
+        assert result["data"] == []
+
+    def test_missing_ts_code(self, mock_tushare_token):
+        """Missing ts_code → error envelope."""
+        with patch("tushare.pro_api"):
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_pledge_detail()
+
+        assert "ts_code is required" in result.get("error", "")
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_margin
+# ---------------------------------------------------------------------------
+
+
+class TestFetchMargin:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal margin → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "trade_date": "20240715",
+                "exchange_id": "SSE",
+                "rzye": 500000000000.0,
+                "rqye": 20000000000.0,
+                "rzrqye": 520000000000.0,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.margin.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_margin(trade_date="20240715")
+
+        assert result["endpoint"] == "margin"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["rzye"] == 500000000000.0
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.margin.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_margin()
+
+        assert result["endpoint"] == "margin"
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_margin_secs
+# ---------------------------------------------------------------------------
+
+
+class TestFetchMarginSecs:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal margin_secs → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": "20240715",
+                "exchange": "SSE",
+                "rzye": 5000000000.0,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.margin_secs.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_margin_secs(ts_code="000001.SZ")
+
+        assert result["endpoint"] == "margin_secs"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["ts_code"] == "000001.SZ"
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.margin_secs.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_margin_secs()
+
+        assert result["endpoint"] == "margin_secs"
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P2 (new): fetch_top_inst
+# ---------------------------------------------------------------------------
+
+
+class TestFetchTopInst:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal top_inst → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "trade_date": "20240715",
+                "ts_code": "000001.SZ",
+                "inst_name": "机构专用",
+                "buy_amount": 50000000.0,
+                "sell_amount": 20000000.0,
+                "net_amount": 30000000.0,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.top_inst.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_top_inst(trade_date="20240715")
+
+        assert result["endpoint"] == "top_inst"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["inst_name"] == "机构专用"
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.top_inst.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_top_inst(trade_date="20240715")
+
+        assert result["endpoint"] == "top_inst"
+        assert result["data"] == []
+
+    def test_missing_trade_date(self, mock_tushare_token):
+        """Missing trade_date → error envelope."""
+        with patch("tushare.pro_api"):
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_top_inst()
+
+        assert "trade_date is required" in result.get("error", "")
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P2 (new): fetch_idx_factor_pro
+# ---------------------------------------------------------------------------
+
+
+class TestFetchIdxFactorPro:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal idx_factor_pro → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "000300.SH",
+                "trade_date": "20240715",
+                "factor_name": "alpha_001",
+                "factor_value": 0.85,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.idx_factor_pro.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_idx_factor_pro(ts_code="000300.SH")
+
+        assert result["endpoint"] == "idx_factor_pro"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["factor_value"] == 0.85
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.idx_factor_pro.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_idx_factor_pro()
+
+        assert result["endpoint"] == "idx_factor_pro"
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P2 (new): fetch_fund_factor_pro
+# ---------------------------------------------------------------------------
+
+
+class TestFetchFundFactorPro:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal fund_factor_pro → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "159915.SZ",
+                "trade_date": "20240715",
+                "factor_name": "alpha_001",
+                "factor_value": 0.65,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.fund_factor_pro.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_fund_factor_pro(ts_code="159915.SZ")
+
+        assert result["endpoint"] == "fund_factor_pro"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["factor_value"] == 0.65
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.fund_factor_pro.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_fund_factor_pro()
+
+        assert result["endpoint"] == "fund_factor_pro"
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P2 (new): fetch_cn_pmi / fetch_cn_m / fetch_sf_month / fetch_shibor_lpr
+#           (tested via cn_macro routing)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchCnMacroNewIndicators:
+    def test_pmi_via_cn_macro(self, mock_tushare_token):
+        """indicator='pmi' → routed to fetch_cn_pmi."""
+        df = pd.DataFrame([
+            {"m": "202407", "pmi": 50.2},
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.cn_pmi.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_cn_macro(indicator="pmi")
+
+        assert result["endpoint"] == "cn_pmi"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["pmi"] == 50.2
+
+    def test_money_supply_via_cn_macro(self, mock_tushare_token):
+        """indicator='money_supply' → routed to fetch_cn_m."""
+        df = pd.DataFrame([
+            {"m": "202407", "m2": 300000.0},
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.cn_m.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_cn_macro(indicator="money_supply")
+
+        assert result["endpoint"] == "cn_m"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["m2"] == 300000.0
+
+    def test_social_financing_via_cn_macro(self, mock_tushare_token):
+        """indicator='social_financing' → routed to fetch_sf_month."""
+        df = pd.DataFrame([
+            {"m": "202407", "sf": 50000.0},
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.sf_month.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_cn_macro(indicator="social_financing")
+
+        assert result["endpoint"] == "sf_month"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["sf"] == 50000.0
+
+    def test_lpr_via_cn_macro(self, mock_tushare_token):
+        """indicator='lpr' → routed to fetch_shibor_lpr."""
+        df = pd.DataFrame([
+            {"date": "20240715", "1y": 3.45, "5y": 3.95},
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.shibor_lpr.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_cn_macro(indicator="lpr")
+
+        assert result["endpoint"] == "shibor_lpr"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["1y"] == 3.45
+
+    def test_lpr_with_trade_date(self, mock_tushare_token):
+        """indicator='lpr' with trade_date → passed as date param."""
+        df = pd.DataFrame([
+            {"date": "20240715", "1y": 3.45},
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.shibor_lpr.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_cn_macro(indicator="lpr", trade_date="20240715")
+
+        assert result["endpoint"] == "shibor_lpr"
+        call_kwargs = mock_pro.return_value.shibor_lpr.call_args[1]
+        assert call_kwargs["date"] == "20240715"
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_dc_index (东方财富概念板块)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchDcIndex:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal dc_index → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "BKC112.DC",
+                "name": "消费电子",
+                "trade_date": "20240715",
+                "pct_change": 3.2,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.dc_index.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_dc_index(ts_code="BKC112.DC")
+
+        assert result["endpoint"] == "dc_index"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["name"] == "消费电子"
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.dc_index.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_dc_index()
+
+        assert result["endpoint"] == "dc_index"
+        assert result["data"] == []
+
+    def test_exception(self, mock_tushare_token):
+        """API exception → returns error envelope."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.dc_index.side_effect = RuntimeError("API error")
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_dc_index()
+
+        assert result["endpoint"] == "dc_index"
+        assert "API error" in result["error"]
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_dc_member (东方财富板块成分)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchDcMember:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal dc_member → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "BKC112.DC",
+                "con_code": "000001.SZ",
+                "name": "平安银行",
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.dc_member.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_dc_member(ts_code="BKC112.DC")
+
+        assert result["endpoint"] == "dc_member"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["con_code"] == "000001.SZ"
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.dc_member.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_dc_member(ts_code="BKC112.DC")
+
+        assert result["endpoint"] == "dc_member"
+        assert result["data"] == []
+
+    def test_missing_ts_code(self, mock_tushare_token):
+        """Missing ts_code → error envelope."""
+        with patch("tushare.pro_api"):
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_dc_member()
+
+        assert "ts_code is required" in result.get("error", "")
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_tdx_index (通达信板块信息)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchTdxIndex:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal tdx_index → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "865200.TI",
+                "name": "人工智能",
+                "trade_date": "20240715",
+                "industry": "科技",
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.tdx_index.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_tdx_index(ts_code="865200.TI")
+
+        assert result["endpoint"] == "tdx_index"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["name"] == "人工智能"
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.tdx_index.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_tdx_index()
+
+        assert result["endpoint"] == "tdx_index"
+        assert result["data"] == []
+
+    def test_exception(self, mock_tushare_token):
+        """API exception → returns error envelope."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.tdx_index.side_effect = RuntimeError("Network error")
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_tdx_index()
+
+        assert result["endpoint"] == "tdx_index"
+        assert "Network error" in result["error"]
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_tdx_member (通达信板块成分)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchTdxMember:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal tdx_member → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "865200.TI",
+                "con_code": "600519.SH",
+                "name": "贵州茅台",
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.tdx_member.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_tdx_member(ts_code="865200.TI")
+
+        assert result["endpoint"] == "tdx_member"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["con_code"] == "600519.SH"
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.tdx_member.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_tdx_member(ts_code="865200.TI")
+
+        assert result["endpoint"] == "tdx_member"
+        assert result["data"] == []
+
+    def test_missing_ts_code(self, mock_tushare_token):
+        """Missing ts_code → error envelope."""
+        with patch("tushare.pro_api"):
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_tdx_member()
+
+        assert "ts_code is required" in result.get("error", "")
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_tdx_daily (通达信板块行情)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchTdxDaily:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal tdx_daily → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "ts_code": "865200.TI",
+                "trade_date": "20240715",
+                "pct_change": 2.5,
+                "amount": 3000000000.0,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.tdx_daily.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_tdx_daily(ts_code="865200.TI")
+
+        assert result["endpoint"] == "tdx_daily"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["pct_change"] == 2.5
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.tdx_daily.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_tdx_daily()
+
+        assert result["endpoint"] == "tdx_daily"
+        assert result["data"] == []
+
+    def test_exception(self, mock_tushare_token):
+        """API exception → returns error envelope."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.tdx_daily.side_effect = RuntimeError("API error")
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_tdx_daily()
+
+        assert result["endpoint"] == "tdx_daily"
+        assert "API error" in result["error"]
+        assert result["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# P1 (new): fetch_limit_cpt_list (涨停最强板块统计)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchLimitCptList:
+    def test_normal_return(self, mock_tushare_token):
+        """Normal limit_cpt_list → returns envelope with data."""
+        df = pd.DataFrame([
+            {
+                "trade_date": "20240715",
+                "industry": "软件",
+                "limit_count": 5,
+                "total_count": 50,
+            },
+        ])
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.limit_cpt_list.return_value = df
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_limit_cpt_list(trade_date="20240715")
+
+        assert result["endpoint"] == "limit_cpt_list"
+        assert result["data_source"] == "tushare"
+        assert len(result["data"]) == 1
+        assert result["data"][0]["limit_count"] == 5
+
+    def test_empty_return(self, mock_tushare_token):
+        """Empty DataFrame → returns envelope with empty data list."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.limit_cpt_list.return_value = pd.DataFrame()
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_limit_cpt_list()
+
+        assert result["endpoint"] == "limit_cpt_list"
+        assert result["data"] == []
+
+    def test_exception(self, mock_tushare_token):
+        """API exception → returns error envelope."""
+        with patch("tushare.pro_api") as mock_pro:
+            mock_pro.return_value.limit_cpt_list.side_effect = RuntimeError("API error")
+            from backtest.loaders.tushare_featured import TushareFeaturedProvider
+
+            provider = TushareFeaturedProvider()
+            result = provider.fetch_limit_cpt_list()
+
+        assert result["endpoint"] == "limit_cpt_list"
+        assert "API error" in result["error"]
+        assert result["data"] == []

@@ -560,13 +560,14 @@ class AgentLoop:
         """
         self._cancel_event.set()
 
-    def run(self, user_message: str, history: Optional[List[Dict[str, Any]]] = None, session_id: str = "") -> Dict[str, Any]:
+    def run(self, user_message: str, history: Optional[List[Dict[str, Any]]] = None, session_id: str = "", invocation_context: Optional[Any] = None) -> Dict[str, Any]:
         """Run the ReAct loop synchronously.
 
         Args:
             user_message: User message.
             history: Prior conversation messages.
             session_id: Session ID.
+            invocation_context: Optional InvocationContext for non-interactive triggers.
 
         Returns:
             Execution result dict.
@@ -598,7 +599,7 @@ class AgentLoop:
             )
         goal_store = None
         goal_turn_accounted = False
-        messages = context.build_messages(llm_user_message, history)
+        messages = context.build_messages(llm_user_message, history, invocation_context=invocation_context)
         react_trace: List[Dict[str, Any]] = []
 
         trace_dir = SESSIONS_DIR / session_id if session_id else run_dir

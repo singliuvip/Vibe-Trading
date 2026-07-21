@@ -336,37 +336,48 @@ def _fetch_tushare_statement(
         import pandas as pd
 
         from backtest.loaders.tushare_fundamentals import TushareFundamentalProvider
+        from src.core.tushare_market_data import TushareMarketDataService
 
-        provider = TushareFundamentalProvider()
-        schema = provider.describe_table(table)
+        svc = TushareMarketDataService(
+            fundamentals_provider=TushareFundamentalProvider(),
+        )
+
+        schema = svc._fundamentals.describe_table(table)
 
         # Request all non-identity columns to get full financial detail.
         all_fields = [c.name for c in schema.columns if not c.required]
 
-        frame = provider.query_fundamentals(
-            table=table,
-            codes=[code],
+        result = svc.get_financial_statements(
+            statement_type=statement,
+            ts_code=code,
+            max_rows=0,  # no cap — handled below
             as_of=pd.Timestamp.now(),
             fields=all_fields,
         )
 
-        if frame.empty:
+        if result.get("error"):
+            return {"error": f"Tushare API error: {result['error']}"}
+
+        raw_rows = result.get("data", [])
+        if not raw_rows:
             return {"ok": True, "data": [], "source": "tushare", "pit_safe": True}
 
+        frame = pd.DataFrame(raw_rows)
+
         # Apply annual/quarter filtering on end_date (YYYYMMDD format).
-        if period == "annual":
+        if period == "annual" and "end_date" in frame.columns:
             annual_mask = frame["end_date"].astype(str).str.endswith("1231")
             annual = frame[annual_mask]
             if not annual.empty:
                 frame = annual
-            # else: fall through to return all periods when no annual rows match.
 
         # Newest-first by end_date, capped to _MAX_PERIODS.
-        frame = frame.sort_values("end_date", ascending=False).head(_MAX_PERIODS)
+        if "end_date" in frame.columns:
+            frame = frame.sort_values("end_date", ascending=False).head(_MAX_PERIODS)
 
         # Convert to JSON-safe list of dicts.
         frame = frame.where(pd.notna(frame), None)
-        raw_rows: list[dict[str, Any]] = frame.to_dict(orient="records")
+        raw_rows = frame.to_dict(orient="records")
 
         # Ensure all values are JSON-serializable (numpy types, Timestamps).
         clean_rows: list[dict[str, Any]] = []

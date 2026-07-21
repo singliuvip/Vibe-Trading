@@ -150,14 +150,14 @@ class TestFallbackChains:
         """Equity chains lead with throttle-tolerant public sources and trail
         with key-gated REST fallbacks, in the exact reviewed order."""
         assert FALLBACK_CHAINS["a_share"] == [
-            "tencent", "mootdx", "eastmoney", "baostock", "akshare", "tushare", "local",
+            "tushare", "tencent", "mootdx", "baostock", "akshare", "eastmoney", "local",
         ]
         assert FALLBACK_CHAINS["us_equity"] == [
             "yahoo", "stooq", "sina", "eastmoney", "yfinance", "tiingo", "fmp",
             "finnhub", "alphavantage", "akshare", "local",
         ]
         assert FALLBACK_CHAINS["hk_equity"] == [
-            "eastmoney", "yahoo", "futu", "yfinance", "akshare", "local",
+            "yahoo", "akshare", "futu", "yfinance", "eastmoney", "local",
         ]
 
     def test_us_equity_includes_sina_fallback(self) -> None:

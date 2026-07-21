@@ -56,7 +56,7 @@ def search_security_master(
         JSON 字符串，包含 ``ok``、``data_source``、``endpoint``、``retrieved_at``、
         ``is_provisional`` 和 ``data``（证券列表）。
     """
-    from backtest.loaders.tushare_refdata import TushareRefDataProvider
+    from src.core.tushare_market_data import TushareMarketDataService
 
     kind = kind.strip().lower()
     if kind not in _VALID_KINDS:
@@ -67,27 +67,18 @@ def search_security_master(
     market = market.strip() if market else ""
 
     try:
-        provider = TushareRefDataProvider()
+        from backtest.loaders.tushare_refdata import TushareRefDataProvider
+
+        svc = TushareMarketDataService(
+            refdata_provider=TushareRefDataProvider(),
+        )
+        result = svc.get_security_master(kind=kind, market=market, list_status=list_status)
     except RuntimeError as exc:
         return json.dumps(
             {"ok": False, "error": str(exc),
              "hint": "Set TUSHARE_TOKEN in your environment."},
             ensure_ascii=False,
         )
-
-    try:
-        if kind == "stock":
-            mkt: str | None = market if market else None
-            result = provider.fetch_stock_list(market=mkt, list_status=list_status)
-        elif kind == "fund":
-            mkt = market if market else None
-            result = provider.fetch_fund_list(market=mkt)
-        else:  # option
-            mkt = market if market else None
-            result = provider.fetch_option_list(exchange=mkt)
-    except Exception as exc:
-        logger.exception("search_security_master failed for kind=%s", kind)
-        return _error(str(exc))
 
     # Merge in ok flag.
     envelope: dict[str, Any] = {"ok": "error" not in result, **result}

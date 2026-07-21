@@ -140,6 +140,7 @@ class Attempt:
         completed_at: Completion time in ISO format, if available.
         error: Error message when the attempt fails.
         metrics: Snapshot of backtest metrics.
+        metadata: Opaque metadata for cross-cutting context (e.g. invocation_context).
     """
 
     attempt_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
@@ -154,6 +155,7 @@ class Attempt:
     completed_at: Optional[str] = None
     error: Optional[str] = None
     metrics: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the attempt to a dictionary.

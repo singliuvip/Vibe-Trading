@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from langchain_core.tools import tool
@@ -35,8 +34,8 @@ _VALID_KINDS = frozenset({
 })
 
 
-@tool
-def get_featured_data(
+# 核心实现函数（无装饰器，可被任何调用者安全使用）
+def execute_featured_data_json(
     kind: str,
     ts_code: str = "",
     trade_date: str = "",
@@ -141,8 +140,6 @@ def get_featured_data(
         JSON 字符串，包含 ``data_source``、``endpoint``、``retrieved_at``、
         ``is_provisional`` 和 ``data``（数据列表）。
     """
-    from backtest.loaders.tushare_featured import TushareFeaturedProvider
-
     kind = kind.strip().lower()
     if kind not in _VALID_KINDS:
         return json.dumps(
@@ -165,364 +162,67 @@ def get_featured_data(
         )
 
     try:
-        provider = TushareFeaturedProvider()
+        from backtest.loaders.tushare_featured import TushareFeaturedProvider
+        from src.core.tushare_market_data import TushareMarketDataService
+
+        svc = TushareMarketDataService(
+            featured_provider=TushareFeaturedProvider(),
+        )
+
+        # Build kwargs dict from the function parameters
+        call_kwargs: dict[str, Any] = {}
+        if ts_code:
+            call_kwargs["ts_code"] = ts_code
+        if trade_date:
+            call_kwargs["trade_date"] = trade_date
+        if start_date:
+            call_kwargs["start_date"] = start_date
+        if end_date:
+            call_kwargs["end_date"] = end_date
+        if limit_type:
+            call_kwargs["limit_type"] = limit_type
+        if market:
+            call_kwargs["market"] = market
+        if exchange:
+            call_kwargs["exchange"] = exchange
+        if type:
+            call_kwargs["type"] = type
+        if ann_date:
+            call_kwargs["ann_date"] = ann_date
+        if month:
+            call_kwargs["month"] = month
+        if indicator:
+            call_kwargs["indicator"] = indicator
+        if name:
+            call_kwargs["name"] = name
+        if hm_name:
+            call_kwargs["hm_name"] = hm_name
+        if tag:
+            call_kwargs["tag"] = tag
+        if con_code:
+            call_kwargs["con_code"] = con_code
+        if hot_type:
+            call_kwargs["hot_type"] = hot_type
+        if is_new:
+            call_kwargs["is_new"] = is_new
+        if idx_type:
+            call_kwargs["idx_type"] = idx_type
+        if nums:
+            call_kwargs["nums"] = nums
+        if exchange_id:
+            call_kwargs["exchange_id"] = exchange_id
+        if start_month:
+            call_kwargs["start_month"] = start_month
+        if end_month:
+            call_kwargs["end_month"] = end_month
+
+        result = svc.get_featured_data(kind=kind, **call_kwargs)
     except RuntimeError as exc:
         return json.dumps(
             {"error": str(exc), "hint": "Set TUSHARE_TOKEN in your environment."},
             ensure_ascii=False,
             indent=2,
         )
-
-    try:
-        if kind == "cyq_perf":
-            result = provider.fetch_cyq_perf(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "cyq_chips":
-            result = provider.fetch_cyq_chips(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "limit_list":
-            result = provider.fetch_limit_list(
-                trade_date=trade_date,
-                ts_code=ts_code,
-                limit_type=limit_type,
-            )
-        elif kind == "ths_hot":
-            result = provider.fetch_ths_hot(
-                trade_date=trade_date,
-                market=market,
-            )
-    except Exception as exc:
-        logger.exception("get_featured_data failed for kind=%s", kind)
-        return json.dumps(
-            {"error": str(exc)},
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    # ── P1-2: concept sector / share float ──
-    try:
-        if kind == "ths_index":
-            result = provider.fetch_ths_index(
-                ts_code=ts_code,
-                exchange=exchange,
-                type=type,
-            )
-        elif kind == "ths_member":
-            result = provider.fetch_ths_member(
-                ts_code=ts_code,
-            )
-        elif kind == "share_float":
-            result = provider.fetch_share_float(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
-    except Exception as exc:
-        logger.exception("get_featured_data failed for kind=%s", kind)
-        return json.dumps(
-            {"error": str(exc)},
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    # ── P2-1: reference data ──
-    try:
-        if kind == "pledge_stat":
-            result = provider.fetch_pledge_stat(
-                ts_code=ts_code,
-            )
-        elif kind == "repurchase":
-            result = provider.fetch_repurchase(
-                ts_code=ts_code,
-                ann_date=ann_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "holdertrade":
-            result = provider.fetch_holdertrade(
-                ts_code=ts_code,
-                ann_date=ann_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "stock_st":
-            result = provider.fetch_stock_st(
-                ts_code=ts_code,
-                trade_date=trade_date,
-            )
-        elif kind == "hsgt_stocks":
-            result = provider.fetch_hsgt_stocks(
-                trade_date=trade_date,
-            )
-    except Exception as exc:
-        logger.exception("get_featured_data failed for kind=%s", kind)
-        return json.dumps(
-            {"error": str(exc)},
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    # ── P2-2: stk_surv / broker_recommend / cn_macro / forecast ──
-    try:
-        if kind == "stk_surv":
-            result = provider.fetch_stk_surv(
-                ts_code=ts_code,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "broker_recommend":
-            result = provider.fetch_broker_recommend(
-                month=month,
-            )
-        elif kind == "cn_macro":
-            result = provider.fetch_cn_macro(
-                indicator=indicator,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-                start_month=start_month,
-                end_month=end_month,
-            )
-        elif kind == "forecast":
-            result = provider.fetch_forecast(
-                ts_code=ts_code,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "report_rc":
-            result = provider.fetch_report_rc(
-                ts_code=ts_code,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "forecast_only":
-            result = provider.fetch_forecast_only(
-                ts_code=ts_code,
-                start_date=start_date,
-                end_date=end_date,
-            )
-    except Exception as exc:
-        logger.exception("get_featured_data failed for kind=%s", kind)
-        return json.dumps(
-            {"error": str(exc)},
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    # ── New P0/P1/P2: all 16 new kinds ──
-    try:
-        if kind == "stk_factor_pro":
-            result = provider.fetch_stk_factor_pro(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "hm_list":
-            result = provider.fetch_hm_list(
-                name=name,
-            )
-        elif kind == "hm_detail":
-            result = provider.fetch_hm_detail(
-                trade_date=trade_date,
-                ts_code=ts_code,
-                hm_name=hm_name,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "limit_list_ths":
-            result = provider.fetch_limit_list_ths(
-                trade_date=trade_date,
-                ts_code=ts_code,
-                limit_type=limit_type,
-                market=market,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "limit_step":
-            result = provider.fetch_limit_step(
-                trade_date=trade_date,
-                ts_code=ts_code,
-                start_date=start_date,
-                end_date=end_date,
-                nums=nums,
-            )
-        elif kind == "dc_hot":
-            result = provider.fetch_dc_hot(
-                trade_date=trade_date,
-                ts_code=ts_code,
-                market=market,
-                hot_type=hot_type,
-                is_new=is_new,
-            )
-        elif kind == "kpl_list":
-            result = provider.fetch_kpl_list(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                tag=tag,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "kpl_concept_cons":
-            result = provider.fetch_kpl_concept_cons(
-                trade_date=trade_date,
-                ts_code=ts_code,
-                con_code=con_code,
-            )
-        elif kind == "ths_daily":
-            result = provider.fetch_ths_daily(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "dc_daily":
-            result = provider.fetch_dc_daily(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-                idx_type=idx_type,
-            )
-        elif kind == "pledge_detail":
-            if not ts_code.strip():
-                result = {
-                    "data_source": "tushare",
-                    "endpoint": "pledge_detail",
-                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
-                    "is_provisional": False,
-                    "error": "ts_code is required for pledge_detail",
-                    "data": [],
-                }
-            else:
-                result = provider.fetch_pledge_detail(ts_code=ts_code)
-        elif kind == "margin":
-            result = provider.fetch_margin(
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-                exchange_id=exchange_id,
-            )
-        elif kind == "margin_secs":
-            result = provider.fetch_margin_secs(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                exchange=exchange,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "top_inst":
-            if not trade_date.strip():
-                result = {
-                    "data_source": "tushare",
-                    "endpoint": "top_inst",
-                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
-                    "is_provisional": False,
-                    "error": "trade_date is required for top_inst",
-                    "data": [],
-                }
-            else:
-                result = provider.fetch_top_inst(
-                    trade_date=trade_date,
-                    ts_code=ts_code,
-                )
-        elif kind == "idx_factor_pro":
-            result = provider.fetch_idx_factor_pro(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "fund_factor_pro":
-            result = provider.fetch_fund_factor_pro(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        # ── P1 bridging: moneyflow / top_list / margin_detail ──
-        elif kind == "moneyflow":
-            result = provider.fetch_moneyflow(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "top_list":
-            result = provider.fetch_top_list(
-                trade_date=trade_date,
-                ts_code=ts_code,
-            )
-        elif kind == "margin_detail":
-            result = provider.fetch_margin_detail(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        # ── P1 new: dc_index / dc_member / tdx_index / tdx_member / tdx_daily / limit_cpt_list ──
-        elif kind == "dc_index":
-            result = provider.fetch_dc_index(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-                market=market,
-            )
-        elif kind == "dc_member":
-            if not ts_code.strip():
-                result = {
-                    "data_source": "tushare",
-                    "endpoint": "dc_member",
-                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
-                    "is_provisional": False,
-                    "error": "ts_code is required for dc_member",
-                    "data": [],
-                }
-            else:
-                result = provider.fetch_dc_member(ts_code=ts_code)
-        elif kind == "tdx_index":
-            result = provider.fetch_tdx_index(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-                market=market,
-            )
-        elif kind == "tdx_member":
-            if not ts_code.strip():
-                result = {
-                    "data_source": "tushare",
-                    "endpoint": "tdx_member",
-                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
-                    "is_provisional": False,
-                    "error": "ts_code is required for tdx_member",
-                    "data": [],
-                }
-            else:
-                result = provider.fetch_tdx_member(ts_code=ts_code)
-        elif kind == "tdx_daily":
-            result = provider.fetch_tdx_daily(
-                ts_code=ts_code,
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        elif kind == "limit_cpt_list":
-            result = provider.fetch_limit_cpt_list(
-                trade_date=trade_date,
-                start_date=start_date,
-                end_date=end_date,
-            )
     except Exception as exc:
         logger.exception("get_featured_data failed for kind=%s", kind)
         return json.dumps(
@@ -532,6 +232,60 @@ def get_featured_data(
         )
 
     return json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False)
+
+
+@tool
+def get_featured_data(
+    kind: str,
+    ts_code: str = "",
+    trade_date: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    limit_type: str = "",
+    market: str = "",
+    exchange: str = "",
+    type: str = "",
+    ann_date: str = "",
+    month: str = "",
+    indicator: str = "",
+    name: str = "",
+    hm_name: str = "",
+    tag: str = "",
+    con_code: str = "",
+    hot_type: str = "",
+    is_new: str = "",
+    idx_type: str = "",
+    nums: str = "",
+    exchange_id: str = "",
+    start_month: str = "",
+    end_month: str = "",
+) -> str:
+    """查询 Tushare 特色数据（需要相应特权）。"""
+    return execute_featured_data_json(
+        kind=kind,
+        ts_code=ts_code,
+        trade_date=trade_date,
+        start_date=start_date,
+        end_date=end_date,
+        limit_type=limit_type,
+        market=market,
+        exchange=exchange,
+        type=type,
+        ann_date=ann_date,
+        month=month,
+        indicator=indicator,
+        name=name,
+        hm_name=hm_name,
+        tag=tag,
+        con_code=con_code,
+        hot_type=hot_type,
+        is_new=is_new,
+        idx_type=idx_type,
+        nums=nums,
+        exchange_id=exchange_id,
+        start_month=start_month,
+        end_month=end_month,
+    )
 
 
 class TushareFeaturedTool(BaseTool):
@@ -574,4 +328,4 @@ class TushareFeaturedTool(BaseTool):
     is_readonly = True
 
     def execute(self, **kwargs: Any) -> str:
-        return get_featured_data(**kwargs)
+        return execute_featured_data_json(**kwargs)

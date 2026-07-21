@@ -814,6 +814,15 @@ class TushareFeaturedProvider:
         # Indicators that use month-based parameters (YYYYMM)
         _MONTH_INDICATORS = frozenset({"pmi", "money_supply", "social_financing"})
 
+        def _ymd_to_ym(date_str: str) -> str:
+            """Convert YYYYMMDD to YYYYMM. If already YYYYMM (6 digits), return as-is."""
+            s = date_str.strip()
+            if len(s) == 8 and s.isdigit():
+                return s[:6]
+            if len(s) == 6 and s.isdigit():
+                return s
+            return s  # fallback
+
         if not indicator:
             return self._make_error_envelope(
                 "cn_macro",
@@ -841,11 +850,11 @@ class TushareFeaturedProvider:
                 if start_month:
                     kwargs["start_month"] = start_month
                 elif start_date:
-                    kwargs["start_month"] = start_date
+                    kwargs["start_month"] = _ymd_to_ym(start_date)
                 if end_month:
                     kwargs["end_month"] = end_month
                 elif end_date:
-                    kwargs["end_month"] = end_date
+                    kwargs["end_month"] = _ymd_to_ym(end_date)
             else:
                 if start_date:
                     kwargs["start_date"] = start_date

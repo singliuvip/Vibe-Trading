@@ -120,15 +120,13 @@ _NO_NETWORK_FALLBACK_SOURCES: frozenset[str] = frozenset({"local", "qveris"})  #
 # Fallback chains: market_type -> ordered list of source names
 # ---------------------------------------------------------------------------
 
-# Chains are ordered by IP-ban risk first (lighter, throttle-tolerant public
-# endpoints lead; key-gated REST and rate-limit-prone sources trail), then by
-# data quality. Eastmoney/Sina/Stooq/Yahoo are unauthenticated public sources
-# that must be politely throttled; Finnhub/AlphaVantage/Tiingo/FMP are key-gated
-# REST fallbacks placed deeper in the chain.
+# Tushare first for A-share (authorized premium source), Yahoo first for US/HK
+# (with Stooq/AKShare as 403 fallback), Eastmoney demoted to last resort due to
+# aggressive rate limiting.
 FALLBACK_CHAINS: dict[str, list[str]] = {
-    "a_share":   ["tencent", "mootdx", "eastmoney", "baostock", "akshare", "tushare", "local"],
+    "a_share":   ["tushare", "tencent", "mootdx", "baostock", "akshare", "eastmoney", "local"],
     "us_equity": ["yahoo", "stooq", "sina", "eastmoney", "yfinance", "tiingo", "fmp", "finnhub", "alphavantage", "akshare", "local"],
-    "hk_equity": ["eastmoney", "yahoo", "futu", "yfinance", "akshare", "local"],
+    "hk_equity": ["yahoo", "akshare", "futu", "yfinance", "eastmoney", "local"],
     "india_equity": ["yahoo", "yfinance", "india_broker", "local"],
     "crypto":    ["okx", "ccxt", "yfinance", "local"],
     "futures":   ["tushare", "akshare", "local"],

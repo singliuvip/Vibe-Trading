@@ -89,6 +89,7 @@ class SessionService:
         role: str = "user",
         *,
         include_shell_tools: bool = False,
+        invocation_context: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Send a message to a session and trigger execution.
 
@@ -97,6 +98,7 @@ class SessionService:
             content: Message content.
             role: Message role.
             include_shell_tools: Whether this attempt may use shell tools.
+            invocation_context: Optional InvocationContext for non-interactive triggers.
 
         Returns:
             Dictionary containing message_id and attempt_id.
@@ -114,6 +116,8 @@ class SessionService:
             return {"message_id": message.message_id}
 
         attempt = Attempt(session_id=session_id, parent_attempt_id=session.last_attempt_id, prompt=content)
+        if invocation_context:
+            attempt.metadata["invocation_context"] = invocation_context.to_dict() if hasattr(invocation_context, "to_dict") else invocation_context
         self.store.create_attempt(attempt)
         session.config["include_shell_tools"] = include_shell_tools
         session.last_attempt_id = attempt.attempt_id
@@ -121,7 +125,7 @@ class SessionService:
         self.store.update_session(session)
         self.event_bus.emit(session_id, "attempt.created", {"attempt_id": attempt.attempt_id, "prompt": content})
 
-        asyncio.create_task(self._run_attempt(session, attempt, include_shell_tools=include_shell_tools))
+        asyncio.create_task(self._run_attempt(session, attempt, include_shell_tools=include_shell_tools, invocation_context=invocation_context))
         return {"message_id": message.message_id, "attempt_id": attempt.attempt_id}
 
     def get_messages(self, session_id: str, limit: int = 100) -> list[Message]:
@@ -143,7 +147,7 @@ class SessionService:
         loop.cancel()
         return True
 
-    async def _run_attempt(self, session: Session, attempt: Attempt, *, include_shell_tools: bool = False) -> None:
+    async def _run_attempt(self, session: Session, attempt: Attempt, *, include_shell_tools: bool = False, invocation_context: Optional[Any] = None) -> None:
         """Execute an Attempt in the background."""
         attempt.mark_running()
         self.store.update_attempt(attempt)
@@ -156,6 +160,7 @@ class SessionService:
                 messages=messages,
                 include_shell_tools=include_shell_tools,
                 session_config=dict(session.config),
+                invocation_context=invocation_context,
             )
             if result.get("status") == "success":
                 attempt.mark_completed(summary=result.get("content", ""))
@@ -198,6 +203,7 @@ class SessionService:
         *,
         include_shell_tools: bool = False,
         session_config: Optional[Dict[str, Any]] = None,
+        invocation_context: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Execute an attempt with the V5 AgentLoop.
 
@@ -209,6 +215,7 @@ class SessionService:
                 definitions under the ``mcpServers`` key are merged on top of
                 the user config file via ``load_runtime_agent_config`` so each
                 session can extend or override the global MCP server list.
+            invocation_context: Optional InvocationContext for non-interactive triggers.
 
         Returns:
             Result dictionary containing status, run_dir, run_id, metrics, and related fields.
@@ -269,6 +276,7 @@ class SessionService:
                     user_message=attempt.prompt,
                     history=history,
                     session_id=session_id,
+                    invocation_context=invocation_context,
                 ),
             )
         finally:

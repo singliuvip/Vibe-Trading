@@ -96,6 +96,10 @@ class ScheduledResearchJob:
         last_run_at: Epoch-millisecond timestamp of the most recent executor
             attempt, or ``None`` when the job has not fired yet.
         config: Opaque dict for future backtest parameters.
+        last_session_id: Session ID of the most recent dispatch.
+        last_attempt_id: Attempt ID of the most recent dispatch.
+        last_run_status: Outcome of the most recent run ("succeeded" | "failed").
+        last_error: Error message from the most recent failed run, if any.
     """
 
     id: str
@@ -106,6 +110,10 @@ class ScheduledResearchJob:
     created_at: int = field(default_factory=lambda: int(time.time() * 1000))
     last_run_at: Optional[int] = None
     config: Dict[str, Any] = field(default_factory=dict)
+    last_session_id: Optional[str] = None
+    last_attempt_id: Optional[str] = None
+    last_run_status: Optional[str] = None  # "succeeded" | "failed"
+    last_error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a plain JSON-serializable dict.
@@ -123,6 +131,10 @@ class ScheduledResearchJob:
             "created_at": self.created_at,
             "last_run_at": self.last_run_at,
             "config": self.config,
+            "last_session_id": self.last_session_id,
+            "last_attempt_id": self.last_attempt_id,
+            "last_run_status": self.last_run_status,
+            "last_error": self.last_error,
         }
 
     @classmethod
@@ -164,4 +176,8 @@ class ScheduledResearchJob:
             created_at=created_at,
             last_run_at=last_run_at,
             config=config,
+            last_session_id=data.get("last_session_id"),
+            last_attempt_id=data.get("last_attempt_id"),
+            last_run_status=data.get("last_run_status"),
+            last_error=data.get("last_error"),
         )

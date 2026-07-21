@@ -153,10 +153,29 @@ async def _run_startup_preflight() -> None:
     from src.preflight import run_preflight
 
     run_preflight(console)
-    _start_scheduled_research_executor()
+
+    # ── Scheduled Research Executor ────────────────────────────────────
     from src.config.accessor import get_env_config
 
-    if get_env_config().agent_tuning.vibe_trading_channels_auto_start:
+    cfg = get_env_config()
+    scheduler_enabled = cfg.agent_tuning.vibe_trading_enable_scheduler
+    session_runtime_enabled = cfg.api.enable_session_runtime
+
+    if scheduler_enabled:
+        logger.info("scheduled research executor: enabled (VIBE_TRADING_ENABLE_SCHEDULER=1)")
+        if not session_runtime_enabled:
+            logger.warning(
+                "scheduled research executor is enabled but session runtime is disabled "
+                "(ENABLE_SESSION_RUNTIME=false); scheduled jobs will fail at dispatch"
+            )
+    else:
+        logger.warning(
+            "scheduled research executor: disabled — "
+            "set VIBE_TRADING_ENABLE_SCHEDULER=1 to enable"
+        )
+    _start_scheduled_research_executor()
+
+    if cfg.agent_tuning.vibe_trading_channels_auto_start:
         await _start_channel_runtime()
 
 

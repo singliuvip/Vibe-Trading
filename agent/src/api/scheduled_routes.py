@@ -51,13 +51,17 @@ def _get_scheduled_research_store():
     return _scheduled_research_store
 
 
-async def _dispatch_scheduled_research_job(job) -> None:
+async def _dispatch_scheduled_research_job(job) -> Dict[str, str]:
     """Enqueue one scheduled research job through the session runtime.
 
     ``send_message`` queues the agent attempt and returns once accepted; it
     does not wait for that agent run to reach a terminal status. The executor's
     ``COMPLETED`` state for this dispatch path means "successfully enqueued."
+
+    Returns dict with session_id and attempt_id for receipt tracking.
     """
+    from src.core.invocation import InvocationContext
+
     host = _sys.modules.get("api_server") or _sys.modules.get("agent.api_server")
     svc = host._get_session_service()
     if not svc:
@@ -67,12 +71,26 @@ async def _dispatch_scheduled_research_job(job) -> None:
     session = svc.create_session(
         title=f"scheduled-research:{job.id}", config=dict(job.config)
     )
+    now_ms = int(time.time() * 1000)
+    invocation_ctx = InvocationContext(
+        source="scheduled_research",
+        trigger_id=job.id,
+        scheduled_for=job.next_run_at,
+        triggered_at=now_ms,
+        schedule=job.schedule,
+        unattended=True,
+        research_only=True,
+    )
     logger.info(
         "dispatching scheduled research job %s via session %s",
         job.id,
         session.session_id,
     )
-    await svc.send_message(session.session_id, job.prompt)
+    result = await svc.send_message(
+        session.session_id, job.prompt,
+        invocation_context=invocation_ctx,
+    )
+    return {"session_id": session.session_id, "attempt_id": result.get("attempt_id", "")}
 
 
 def _get_scheduled_research_executor():
@@ -138,6 +156,27 @@ class ScheduledRunResponse(BaseModel):
     status: str
     created_at: int
     config: Dict[str, Any] = Field(default_factory=dict)
+    execution_enabled: bool = Field(
+        default=True,
+        description="Whether the scheduler is currently enabled to execute this job",
+    )
+
+
+class SchedulerStatusResponse(BaseModel):
+    """API response for GET /scheduled-runs/status."""
+
+    enabled: bool = Field(description="Whether the scheduler feature is enabled")
+    running: bool = Field(description="Whether the background loop is active")
+    session_runtime_enabled: bool = Field(
+        description="Whether the session runtime is available for dispatch"
+    )
+    last_tick_at: Optional[int] = Field(
+        None, description="Epoch-ms of the most recent tick"
+    )
+    last_error: Optional[str] = Field(
+        None, description="Most recent error message, if any"
+    )
+    tick_interval_ms: int = Field(description="Poll interval in milliseconds")
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +223,10 @@ def register_scheduled_routes(
     ) -> ScheduledRunResponse:
         """Create (or replace) a scheduled research job.
 
-        The job is persisted immediately. No execution is triggered.
+        The job is persisted immediately.  When the scheduler executor is
+        disabled the job is still stored but the response includes
+        ``execution_enabled=false`` — the caller MUST check this field to
+        know whether the job will actually run.
         """
         from src.scheduled_research.models import (
             JobStatus,
@@ -198,6 +240,7 @@ def register_scheduled_routes(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         now_ms = int(time.time() * 1000)
+        executor_enabled = _scheduled_research_scheduler_enabled()
         job = ScheduledResearchJob(
             id=request.id or str(uuid.uuid4()),
             prompt=request.prompt,
@@ -208,7 +251,20 @@ def register_scheduled_routes(
             config=request.config,
         )
         _get_scheduled_research_store().upsert(job)
-        return ScheduledRunResponse(**job.to_dict())
+
+        if not executor_enabled:
+            logger.warning(
+                "scheduled research job %s created but executor is disabled; "
+                "set VIBE_TRADING_ENABLE_SCHEDULER=1 to enable execution",
+                job.id,
+            )
+        else:
+            # Wake the executor so a near-term job does not wait for a full tick.
+            _get_scheduled_research_executor().wake()
+
+        return ScheduledRunResponse(
+            **job.to_dict(), execution_enabled=executor_enabled
+        )
 
     @app.get(
         "/scheduled-runs",
@@ -223,7 +279,32 @@ def register_scheduled_routes(
         jobs = _get_scheduled_research_store().list_jobs(
             status=status_filter, limit=limit
         )
-        return [ScheduledRunResponse(**j.to_dict()) for j in jobs]
+        executor_enabled = _scheduled_research_scheduler_enabled()
+        return [
+            ScheduledRunResponse(**j.to_dict(), execution_enabled=executor_enabled)
+            for j in jobs
+        ]
+
+    @app.get(
+        "/scheduled-runs/status",
+        response_model=SchedulerStatusResponse,
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_scheduler_status() -> SchedulerStatusResponse:
+        """Return the current status of the scheduled research executor.
+
+        Use this endpoint to verify whether the scheduler is enabled, running,
+        and has a usable session runtime before creating scheduled jobs.
+        """
+        executor = _get_scheduled_research_executor()
+        return SchedulerStatusResponse(
+            enabled=executor.enabled,
+            running=executor.is_running,
+            session_runtime_enabled=executor.session_runtime_available,
+            last_tick_at=executor.last_tick_at,
+            last_error=executor.last_error,
+            tick_interval_ms=executor._tick_interval_ms,
+        )
 
     @app.delete(
         "/scheduled-runs/{job_id}",

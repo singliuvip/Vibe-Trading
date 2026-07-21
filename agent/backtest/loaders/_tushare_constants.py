@@ -17,6 +17,24 @@ TUSHARE_PRIVILEGE_MAP: dict[str, int] = {
     "daily": 2000,
     "weekly": 2000,
     "monthly": 2000,
+    # Index daily/weekly/monthly
+    "index_daily": 2000,
+    "index_weekly": 2000,
+    "index_monthly": 2000,
+    # Fund daily & HK daily
+    "fund_daily": 2000,
+    "hk_daily": 2000,
+    # Daily basic indicators
+    "daily_basic": 2000,
+    # Minute-level bars (historical)
+    "stk_mins": 8000,
+    # Real-time endpoints (high privilege)
+    "rt_k": 15000,
+    "rt_min": 15000,
+    # Call-auction endpoints
+    "stk_auction": 15000,
+    "stk_auction_o": 5000,
+    "stk_auction_c": 5000,
     "balancesheet": 2000,
     "income": 2000,
     "cashflow": 2000,

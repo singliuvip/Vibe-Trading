@@ -14,6 +14,28 @@ from src.agent.tools import ToolRegistry
 
 if TYPE_CHECKING:
     from src.memory.persistent import PersistentMemory
+    from src.core.invocation import InvocationContext
+
+
+def _build_invocation_context_block(ctx) -> str:
+    """Build a trusted system-level context block for non-interactive invocations."""
+    lines = ["## Execution Context (trusted)"]
+    lines.append(f"Source: {ctx.source}")
+    if ctx.trigger_id:
+        lines.append(f"Scheduled job: {ctx.trigger_id}")
+    if ctx.scheduled_for:
+        dt = datetime.fromtimestamp(ctx.scheduled_for / 1000.0, timezone.utc)
+        lines.append(f"Scheduled for: {dt.isoformat()}")
+    if ctx.triggered_at:
+        dt = datetime.fromtimestamp(ctx.triggered_at / 1000.0, timezone.utc)
+        lines.append(f"Triggered at: {dt.isoformat()}")
+    if ctx.schedule:
+        lines.append(f"Schedule: {ctx.schedule}")
+    if ctx.unattended:
+        lines.append("This is an unattended execution. Do not wait for interactive clarification. If essential inputs are missing, report the gap clearly and stop.")
+    if ctx.research_only:
+        lines.append("This is a research-only execution. Do not attempt trading or broker write operations.")
+    return "\n".join(lines)
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +234,7 @@ class ContextBuilder:
         except Exception:  # noqa: BLE001 - prompt count must never break startup
             return 18
 
-    def build_messages(self, user_message: str, history: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    def build_messages(self, user_message: str, history: Optional[List[Dict[str, Any]]] = None, invocation_context: Optional[Any] = None) -> List[Dict[str, Any]]:
         """Build full message list.
 
         Auto-recalls relevant persistent memories and injects them into the
@@ -222,6 +244,7 @@ class ContextBuilder:
         Args:
             user_message: User message.
             history: Prior conversation messages.
+            invocation_context: Optional InvocationContext for non-interactive triggers.
 
         Returns:
             OpenAI-format message list.
@@ -229,6 +252,12 @@ class ContextBuilder:
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self.build_system_prompt(user_message)},
         ]
+
+        # Inject invocation context block for non-interactive triggers.
+        if invocation_context and invocation_context.source != "interactive":
+            trigger_block = _build_invocation_context_block(invocation_context)
+            messages.append({"role": "system", "content": trigger_block})
+
         if history:
             messages.extend(history)
 

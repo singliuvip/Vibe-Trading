@@ -234,9 +234,12 @@ class MarginTradingTool(BaseTool):
     def _execute_tushare(raw_code: str, bare_code: str, days: int) -> str:
         """Fetch margin trading via Tushare margin_detail endpoint."""
         from backtest.loaders.tushare_featured import TushareFeaturedProvider
+        from src.core.tushare_market_data import TushareMarketDataService
 
         try:
-            provider = TushareFeaturedProvider()
+            svc = TushareMarketDataService(
+                featured_provider=TushareFeaturedProvider(),
+            )
         except RuntimeError as exc:
             return _err(f"Tushare not available: {exc}")
 
@@ -246,7 +249,7 @@ class MarginTradingTool(BaseTool):
             ts_code = f"{bare_code}.SH"  # tentatively SH
 
         try:
-            envelope = provider.fetch_margin_detail(ts_code=ts_code)
+            envelope = svc.get_featured_data(kind="margin_detail", ts_code=ts_code)
         except Exception as exc:
             logger.warning("tushare margin_detail failed for %s: %s", ts_code, exc)
             return _err(f"Tushare margin_detail fetch failed: {exc}")

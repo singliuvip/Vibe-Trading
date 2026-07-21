@@ -235,9 +235,12 @@ class DragonTigerTool(BaseTool):
     ) -> str:
         """Fetch dragon-tiger board via Tushare top_list endpoint."""
         from backtest.loaders.tushare_featured import TushareFeaturedProvider
+        from src.core.tushare_market_data import TushareMarketDataService
 
         try:
-            provider = TushareFeaturedProvider()
+            svc = TushareMarketDataService(
+                featured_provider=TushareFeaturedProvider(),
+            )
         except RuntimeError as exc:
             return self._error(f"Tushare not available: {exc}")
 
@@ -257,8 +260,8 @@ class DragonTigerTool(BaseTool):
                 ts_code = ""
 
         try:
-            envelope = provider.fetch_top_list(
-                trade_date=ts_trade_date, ts_code=ts_code
+            envelope = svc.get_featured_data(
+                kind="top_list", trade_date=ts_trade_date, ts_code=ts_code
             )
         except Exception as exc:
             logger.warning("tushare top_list failed: %s", exc)

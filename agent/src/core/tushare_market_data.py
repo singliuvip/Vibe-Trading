@@ -19,6 +19,18 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Privilege helpers
+# ---------------------------------------------------------------------------
+
+
+def get_required_privilege(endpoint: str) -> int | None:
+    """Return the minimum Tushare points required for *endpoint*, or None if unknown."""
+    from backtest.loaders._tushare_constants import TUSHARE_PRIVILEGE_MAP
+
+    return TUSHARE_PRIVILEGE_MAP.get(endpoint)
+
+
+# ---------------------------------------------------------------------------
 # Validation constants
 # ---------------------------------------------------------------------------
 
@@ -112,10 +124,16 @@ class TushareMarketDataService:
         realtime_provider: Any = None,
         auction_provider: Any = None,
         minute_provider: Any = None,
+        refdata_provider: Any = None,
+        featured_provider: Any = None,
+        fundamentals_provider: Any = None,
     ) -> None:
         self._rt = realtime_provider
         self._auction = auction_provider
         self._minute = minute_provider
+        self._refdata = refdata_provider
+        self._featured = featured_provider
+        self._fundamentals = fundamentals_provider
 
     # ------------------------------------------------------------------
     # get_realtime_quotes
@@ -200,6 +218,7 @@ class TushareMarketDataService:
             "retrieved_at": result.get("retrieved_at", datetime.now(timezone.utc).isoformat()),
             "is_provisional": result.get("is_provisional", True),
             "market_session": result["market_session"],
+            "required_privilege": get_required_privilege("rt_k"),
         }
 
         return result
@@ -305,6 +324,7 @@ class TushareMarketDataService:
             "retrieved_at": result.get("retrieved_at", datetime.now(timezone.utc).isoformat()),
             "is_provisional": result.get("is_provisional", is_provisional),
             "session": session,
+            "required_privilege": get_required_privilege(endpoint),
         }
 
         return result
@@ -402,9 +422,299 @@ class TushareMarketDataService:
             "market_session": result["market_session"],
             "timezone": "Asia/Shanghai",
             "row_limit": row_limit,
+            "required_privilege": get_required_privilege("rt_min"),
         }
         if possibly_truncated:
             result["_meta"]["possibly_truncated"] = True
+
+        return result
+
+    # ------------------------------------------------------------------
+    # get_security_master
+    # ------------------------------------------------------------------
+
+    def get_security_master(
+        self,
+        kind: str,
+        market: str = "",
+        list_status: str = "L",
+        max_rows: int = _DEFAULT_MAX_ROWS,
+    ) -> dict[str, Any]:
+        """Fetch security master data (stock/fund/option lists).
+
+        Args:
+            kind: Security type — "stock", "fund", or "option".
+            market: Market filter (SH/SZ/BJ for stock; E/O for fund; SSE/SZSE for option).
+            list_status: Only for stock: L/D/P. Default "L".
+            max_rows: Row cap (default 500). 0 = uncapped.
+
+        Returns:
+            Envelope dict with ``_meta`` and ``data``.
+        """
+        if self._refdata is None:
+            return self._error(
+                "get_security_master requires refdata_provider. "
+                "Pass refdata_provider=TushareRefDataProvider() when constructing TushareMarketDataService.",
+                endpoint="stock_basic",
+                is_provisional=False,
+            )
+
+        kind = kind.strip().lower()
+        _VALID_REFDATA_KINDS = frozenset({"stock", "fund", "option"})
+        if kind not in _VALID_REFDATA_KINDS:
+            return self._error(
+                f"Invalid kind: {kind!r}. Must be one of {sorted(_VALID_REFDATA_KINDS)}.",
+                endpoint="stock_basic",
+                is_provisional=False,
+            )
+
+        endpoint_map = {
+            "stock": ("stock_basic", "L"),
+            "fund": ("fund_basic", ""),
+            "option": ("opt_basic", ""),
+        }
+        endpoint, _ = endpoint_map[kind]
+
+        # Rate-limit
+        _rate_limit(endpoint)
+
+        try:
+            if kind == "stock":
+                mkt = market if market else None
+                result = self._refdata.fetch_stock_list(market=mkt, list_status=list_status)
+            elif kind == "fund":
+                mkt = market if market else None
+                result = self._refdata.fetch_fund_list(market=mkt)
+            else:  # option
+                mkt = market if market else None
+                result = self._refdata.fetch_option_list(exchange=mkt)
+        except Exception as exc:
+            logger.exception("get_security_master failed for kind=%s", kind)
+            return self._error(str(exc), endpoint=endpoint, is_provisional=False)
+
+        # Row cap
+        data_rows = result.get("data", [])
+        if max_rows > 0 and isinstance(data_rows, list) and len(data_rows) > max_rows:
+            result["data"] = data_rows[:max_rows]
+
+        result["_meta"] = {
+            "data_source": result.get("data_source", "tushare"),
+            "endpoint": result.get("endpoint", endpoint),
+            "retrieved_at": result.get("retrieved_at", datetime.now(timezone.utc).isoformat()),
+            "is_provisional": result.get("is_provisional", False),
+            "required_privilege": get_required_privilege(endpoint),
+        }
+
+        return result
+
+    # ------------------------------------------------------------------
+    # get_featured_data
+    # ------------------------------------------------------------------
+
+    # Map of kind -> (provider method name, tushare endpoint)
+    _FEATURED_KIND_MAP: dict[str, tuple[str, str]] = {
+        "cyq_perf": ("fetch_cyq_perf", "cyq_perf"),
+        "cyq_chips": ("fetch_cyq_chips", "cyq_chips"),
+        "limit_list": ("fetch_limit_list", "limit_list_d"),
+        "ths_hot": ("fetch_ths_hot", "ths_hot"),
+        "stk_factor_pro": ("fetch_stk_factor_pro", "stk_factor_pro"),
+        "hm_list": ("fetch_hm_list", "hm_list"),
+        "hm_detail": ("fetch_hm_detail", "hm_detail"),
+        "limit_list_ths": ("fetch_limit_list_ths", "limit_list_ths"),
+        "limit_step": ("fetch_limit_step", "limit_step"),
+        "moneyflow": ("fetch_moneyflow", "moneyflow"),
+        "top_list": ("fetch_top_list", "top_list"),
+        "margin_detail": ("fetch_margin_detail", "margin_detail"),
+        "ths_index": ("fetch_ths_index", "ths_index"),
+        "ths_member": ("fetch_ths_member", "ths_member"),
+        "share_float": ("fetch_share_float", "share_float"),
+        "dc_hot": ("fetch_dc_hot", "dc_hot"),
+        "kpl_list": ("fetch_kpl_list", "kpl_list"),
+        "kpl_concept_cons": ("fetch_kpl_concept_cons", "kpl_concept_cons"),
+        "ths_daily": ("fetch_ths_daily", "ths_daily"),
+        "dc_daily": ("fetch_dc_daily", "dc_daily"),
+        "pledge_detail": ("fetch_pledge_detail", "pledge_detail"),
+        "margin": ("fetch_margin", "margin"),
+        "margin_secs": ("fetch_margin_secs", "margin_secs"),
+        "dc_index": ("fetch_dc_index", "dc_index"),
+        "dc_member": ("fetch_dc_member", "dc_member"),
+        "tdx_index": ("fetch_tdx_index", "tdx_index"),
+        "tdx_member": ("fetch_tdx_member", "tdx_member"),
+        "tdx_daily": ("fetch_tdx_daily", "tdx_daily"),
+        "limit_cpt_list": ("fetch_limit_cpt_list", "limit_cpt_list"),
+        "pledge_stat": ("fetch_pledge_stat", "pledge_stat"),
+        "repurchase": ("fetch_repurchase", "repurchase"),
+        "holdertrade": ("fetch_holdertrade", "stk_holdertrade"),
+        "stock_st": ("fetch_stock_st", "stock_st"),
+        "hsgt_stocks": ("fetch_hsgt_stocks", "stock_hsgt"),
+        "stk_surv": ("fetch_stk_surv", "stk_surv"),
+        "broker_recommend": ("fetch_broker_recommend", "broker_recommend"),
+        "cn_macro": ("fetch_cn_macro", "cn_macro"),
+        "forecast": ("fetch_forecast", "forecast"),
+        "report_rc": ("fetch_report_rc", "report_rc"),
+        "forecast_only": ("fetch_forecast_only", "forecast"),
+        "top_inst": ("fetch_top_inst", "top_inst"),
+        "idx_factor_pro": ("fetch_idx_factor_pro", "idx_factor_pro"),
+        "fund_factor_pro": ("fetch_fund_factor_pro", "fund_factor_pro"),
+    }
+
+    def get_featured_data(
+        self,
+        kind: str,
+        max_rows: int = _DEFAULT_MAX_ROWS,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Fetch Tushare featured data.
+
+        Args:
+            kind: Data type (cyq_perf, limit_list, cn_macro, etc. — 41+ kinds).
+            max_rows: Row cap (default 500). 0 = uncapped.
+            **kwargs: Forwarded to the provider method (ts_code, trade_date, etc.).
+
+        Returns:
+            Envelope dict with ``_meta`` and ``data``.
+        """
+        if self._featured is None:
+            return self._error(
+                "get_featured_data requires featured_provider. "
+                "Pass featured_provider=TushareFeaturedProvider() when constructing TushareMarketDataService.",
+                endpoint="featured",
+                is_provisional=False,
+            )
+
+        kind = kind.strip().lower()
+        kind_info = self._FEATURED_KIND_MAP.get(kind)
+        if kind_info is None:
+            return self._error(
+                f"Invalid kind: {kind!r}. Must be one of {sorted(self._FEATURED_KIND_MAP)}.",
+                endpoint="featured",
+                is_provisional=False,
+            )
+
+        method_name, endpoint = kind_info
+
+        # Rate-limit
+        _rate_limit(endpoint)
+
+        try:
+            method = getattr(self._featured, method_name)
+            result = method(**kwargs)
+        except Exception as exc:
+            logger.exception("get_featured_data failed for kind=%s", kind)
+            return self._error(str(exc), endpoint=endpoint, is_provisional=False)
+
+        # Row cap
+        data_rows = result.get("data", [])
+        if max_rows > 0 and isinstance(data_rows, list) and len(data_rows) > max_rows:
+            result["data"] = data_rows[:max_rows]
+
+        result["_meta"] = {
+            "data_source": result.get("data_source", "tushare"),
+            "endpoint": result.get("endpoint", endpoint),
+            "retrieved_at": result.get("retrieved_at", datetime.now(timezone.utc).isoformat()),
+            "is_provisional": result.get("is_provisional", False),
+            "kind": kind,
+            "required_privilege": get_required_privilege(endpoint),
+        }
+
+        return result
+
+    # ------------------------------------------------------------------
+    # get_financial_statements
+    # ------------------------------------------------------------------
+
+    def get_financial_statements(
+        self,
+        statement_type: str,
+        ts_code: str,
+        max_rows: int = _DEFAULT_MAX_ROWS,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Fetch financial statements via Tushare fundamentals.
+
+        Args:
+            statement_type: One of "balance", "income", "cashflow", "indicators".
+            ts_code: Tushare stock code (e.g. "000001.SZ").
+            max_rows: Row cap (default 500). 0 = uncapped.
+            **kwargs: Additional Tushare parameters (start_date, end_date, etc.).
+
+        Returns:
+            Envelope dict with ``_meta`` and ``data``.
+        """
+        if self._fundamentals is None:
+            return self._error(
+                "get_financial_statements requires fundamentals_provider. "
+                "Pass fundamentals_provider=TushareFundamentalProvider() when constructing TushareMarketDataService.",
+                endpoint="fina_indicator",
+                is_provisional=False,
+            )
+
+        _TABLE_MAP = {
+            "balance": "balancesheet",
+            "income": "income",
+            "cashflow": "cashflow",
+            "indicators": "fina_indicator",
+        }
+
+        statement_type = statement_type.strip().lower()
+        table = _TABLE_MAP.get(statement_type)
+        if table is None:
+            return self._error(
+                f"Invalid statement_type: {statement_type!r}. Must be one of {sorted(_TABLE_MAP)}.",
+                endpoint="fina_indicator",
+                is_provisional=False,
+            )
+
+        if not ts_code or not ts_code.strip():
+            return self._error(
+                "ts_code is required for financial statements.",
+                endpoint=table,
+                is_provisional=False,
+            )
+
+        # Rate-limit
+        _rate_limit(table)
+
+        try:
+            import pandas as pd
+
+            df = self._fundamentals.query_fundamentals(
+                table=table,
+                codes=[ts_code.strip().upper()],
+                as_of=kwargs.pop("as_of", pd.Timestamp.now()),
+                periods=kwargs.pop("periods", None),
+                fields=kwargs.pop("fields", None),
+            )
+            # Convert DataFrame to list of dicts
+            if df is not None and not df.empty:
+                data_rows = df.to_dict(orient="records")
+            else:
+                data_rows = []
+        except Exception as exc:
+            logger.exception("get_financial_statements failed for %s/%s", statement_type, ts_code)
+            return self._error(str(exc), endpoint=table, is_provisional=False)
+
+        # Row cap
+        if max_rows > 0 and len(data_rows) > max_rows:
+            data_rows = data_rows[:max_rows]
+
+        result: dict[str, Any] = {
+            "data_source": "tushare",
+            "endpoint": table,
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            "is_provisional": False,
+            "data": data_rows,
+            "_meta": {
+                "data_source": "tushare",
+                "endpoint": table,
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                "is_provisional": False,
+                "statement_type": statement_type,
+                "ts_code": ts_code.strip().upper(),
+                "row_count": len(data_rows),
+                "required_privilege": get_required_privilege(table),
+            },
+        }
 
         return result
 
@@ -436,5 +746,6 @@ class TushareMarketDataService:
                 "retrieved_at": datetime.now(timezone.utc).isoformat(),
                 "is_provisional": is_provisional,
                 "error": msg,
+                "required_privilege": get_required_privilege(endpoint),
             },
         }

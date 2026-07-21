@@ -12,6 +12,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from src.agent.tools import BaseTool
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,3 +76,34 @@ def get_realtime_minute_bars(
             ensure_ascii=False,
             indent=2,
         )
+
+
+class TushareRealtimeMinuteTool(BaseTool):
+    """BaseTool adapter for get_realtime_minute_bars."""
+    name = "get_realtime_minute_bars"
+    description = get_realtime_minute_bars.__doc__
+    parameters = {
+        "type": "object",
+        "properties": {
+            "codes": {
+                "type": "string",
+                "description": "股票代码，逗号分隔，如 '600000.SH,000001.SZ'",
+            },
+            "frequency": {
+                "type": "string",
+                "enum": ["1MIN", "5MIN", "15MIN", "30MIN", "60MIN"],
+                "description": "K线周期，可选 1MIN/5MIN/15MIN/30MIN/60MIN（默认1MIN）。",
+                "default": "1MIN",
+            },
+            "max_rows": {
+                "type": "integer",
+                "description": "每个标的最大返回行数（默认1000，0=不限制）。",
+                "default": 1000,
+            },
+        },
+        "required": ["codes"],
+    }
+    is_readonly = True
+
+    def execute(self, **kwargs: Any) -> str:
+        return get_realtime_minute_bars(**kwargs)

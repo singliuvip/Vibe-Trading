@@ -12,8 +12,9 @@ import asyncio
 import logging
 import os
 import time
+import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Dict
 
 from src.config.accessor import get_env_config
 from src.scheduled_research.models import JobStatus, ScheduledResearchJob, validate_schedule
@@ -25,7 +26,7 @@ DEFAULT_TICK_INTERVAL_MS = 60 * 1000
 SCHEDULER_ENABLED_ENV = "VIBE_TRADING_ENABLE_SCHEDULER"
 
 NowFn = Callable[[], int]
-DispatchCallback = Callable[[ScheduledResearchJob], Awaitable[None]]
+DispatchCallback = Callable[[ScheduledResearchJob], Awaitable[Dict[str, str]]]
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 # Search by day, not by minute, so an impossible date (e.g. Feb 31) fails fast
@@ -149,11 +150,20 @@ class ScheduledResearchExecutor:
         self._wakeup: asyncio.Event | None = None
         self._stopping = False
         self._recovered_stale_running = False
+        # ── Observability fields ──────────────────────────────────────────
+        self.last_tick_at: int | None = None
+        self.last_error: str | None = None
+        self.session_runtime_available: bool = False
 
     @property
     def is_running(self) -> bool:
         """Return whether the background loop task is active."""
         return self._task is not None and not self._task.done()
+
+    @property
+    def enabled(self) -> bool:
+        """Return whether the executor is enabled (opt-in)."""
+        return self._enabled
 
     def start(self) -> None:
         """Start the background loop.
@@ -165,8 +175,14 @@ class ScheduledResearchExecutor:
         self._stopping = False
         self.recover_stale_running()
         self._wakeup = asyncio.Event()
+        self._check_session_runtime()
         loop = asyncio.get_running_loop()
         self._task = loop.create_task(self._run(), name="scheduled-research-executor")
+        logger.info(
+            "scheduled research executor started (tick_interval_ms=%d, session_runtime=%s)",
+            self._tick_interval_ms,
+            self.session_runtime_available,
+        )
 
     async def stop(self) -> None:
         """Stop the background loop and wait for it to finish.
@@ -230,13 +246,43 @@ class ScheduledResearchExecutor:
         self._recovered_stale_running = True
         return recovered
 
+    def _check_session_runtime(self) -> None:
+        """Check whether the session runtime is available for dispatch.
+
+        Reads the session service from the api_server module (same pattern as
+        ``_dispatch_scheduled_research_job``).  Stores the result in
+        :attr:`session_runtime_available`.
+        """
+        import sys as _sys
+
+        host = _sys.modules.get("api_server") or _sys.modules.get("agent.api_server")
+        svc = host._get_session_service() if host is not None else None
+        self.session_runtime_available = svc is not None
+        if not self.session_runtime_available:
+            logger.warning(
+                "scheduled research executor: session runtime not available; "
+                "scheduled jobs will fail at dispatch"
+            )
+
+    def wake(self) -> None:
+        """Wake the background loop so it polls immediately.
+
+        Call this after creating or modifying a job whose ``next_run_at`` is
+        now (or in the near past) so the executor does not wait for a full
+        tick interval before dispatching it.
+        """
+        if self._wakeup is not None:
+            self._wakeup.set()
+
     async def _run(self) -> None:
         while not self._stopping:
             try:
                 await self.tick(self._now_fn())
+                self.last_tick_at = self._now_fn()
             except asyncio.CancelledError:
                 raise
             except Exception:
+                self.last_error = f"tick failed at {self._now_fn()}: {traceback.format_exc(limit=2)}"
                 logger.error("scheduled research executor tick failed", exc_info=True)
             if self._stopping:
                 break
@@ -272,14 +318,21 @@ class ScheduledResearchExecutor:
         self._store.upsert(job)
 
         try:
-            await self._dispatch(job)
+            receipt = await self._dispatch(job)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             logger.error("scheduled research dispatch failed for job %s", job.id, exc_info=True)
             final_status = JobStatus.FAILED
+            job.last_error = str(exc)
+            job.last_run_status = "failed"
         else:
             final_status = JobStatus.COMPLETED
+            # Store dispatch receipt on the job for observability
+            if isinstance(receipt, dict):
+                job.last_session_id = receipt.get("session_id")
+                job.last_attempt_id = receipt.get("attempt_id")
+            job.last_run_status = "succeeded"
 
         job.last_run_at = now_ms
         try:

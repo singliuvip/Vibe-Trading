@@ -18,6 +18,7 @@ import logging
 from typing import Dict, List, Optional
 
 import pandas as pd
+import requests
 
 from backtest.loaders import yahoo_client
 from backtest.loaders.base import cached_loader_fetch, validate_date_range
@@ -213,8 +214,18 @@ class DataLoader:
                 )
                 if df is not None and not df.empty:
                     result[code] = df
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                if status == 403:
+                    logger.warning(
+                        "Yahoo Finance rejected symbol %s (HTTP 403) — will fall back to alternative source",
+                        code,
+                    )
+                    # Don't retry — let the chain fallback handle it
+                    continue
+                logger.debug("Yahoo Finance HTTP error for %s: %s", code, exc)
             except Exception as exc:
-                logger.warning("yahoo failed for %s: %s", code, exc)
+                logger.debug("Yahoo Finance fetch failed for %s: %s", code, exc)
         return result
 
     def _fetch_one(

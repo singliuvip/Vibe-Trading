@@ -28,6 +28,28 @@ class NoAvailableSourceError(Exception):
     """Raised when no data source is available for a given market."""
 
 
+class DataSourceRejectedError(Exception):
+    """Raised when a data provider actively rejects a request (e.g. HTTP 403).
+
+    Attributes:
+        source: The data source name that rejected the request.
+        status_code: HTTP status code if applicable.
+        message: Human-readable reason.
+    """
+    def __init__(
+        self,
+        source: str,
+        status_code: int | None = None,
+        message: str = "",
+    ) -> None:
+        self.source = source
+        self.status_code = status_code
+        self.message = message or f"Data source '{source}' rejected the request"
+        if status_code:
+            self.message += f" (HTTP {status_code})"
+        super().__init__(self.message)
+
+
 def validate_date_range(start_date: str, end_date: str) -> None:
     """Validate that start_date <= end_date.
 

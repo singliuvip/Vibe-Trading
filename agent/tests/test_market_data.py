@@ -33,9 +33,9 @@ from src.market_data import (
 @pytest.mark.parametrize(
     "code,expected",
     [
-        ("600519.SH", "tencent"),
-        ("000001.SZ", "tencent"),
-        ("430139.BJ", "tencent"),
+        ("600519.SH", "tushare"),
+        ("000001.SZ", "tushare"),
+        ("430139.BJ", "tushare"),
         ("AAPL.US", "yahoo"),
         ("700.HK", "yahoo"),
         ("00700.HK", "yahoo"),

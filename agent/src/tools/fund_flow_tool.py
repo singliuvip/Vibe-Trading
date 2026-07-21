@@ -266,9 +266,12 @@ class FundFlowTool(BaseTool):
             )
 
         from backtest.loaders.tushare_featured import TushareFeaturedProvider
+        from src.core.tushare_market_data import TushareMarketDataService
 
         try:
-            provider = TushareFeaturedProvider()
+            svc = TushareMarketDataService(
+                featured_provider=TushareFeaturedProvider(),
+            )
         except RuntimeError as exc:
             return _error(f"Tushare not available: {exc}")
 
@@ -282,7 +285,7 @@ class FundFlowTool(BaseTool):
                 # Convert to Tushare ts_code format (e.g. 600519.SH)
                 raw = code.rpartition(".")[0].upper() + "." + code.rpartition(".")[2].upper()
                 # Tushare moneyflow always returns daily data
-                envelope = provider.fetch_moneyflow(ts_code=raw)
+                envelope = svc.get_featured_data(kind="moneyflow", ts_code=raw)
                 # Check for Tushare API-level errors
                 if envelope.get("error"):
                     results[code] = {"symbol": code, "error": f"Tushare API error: {envelope['error']}"}

@@ -1646,7 +1646,7 @@ async def get_featured_data(
         start_month: 起始月份 YYYYMM，用于 cn_pmi/cn_m/sf_month（由 cn_macro 内部路由）。
         end_month: 结束月份 YYYYMM，用于 cn_pmi/cn_m/sf_month（由 cn_macro 内部路由）。
     """
-    from src.tools.tushare_featured_tool import get_featured_data as _tool
+    from src.tools.tushare_featured_tool import execute_featured_data_json as _tool
 
     return _tool(
         kind=kind,

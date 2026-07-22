@@ -177,3 +177,112 @@ class TestRoutingDescription:
 
     def test_description_keeps_a_concrete_example(self):
         assert '{"codes": ["600519.SH"' in FundFlowTool().description
+
+
+class TestFundFlowTushareRouting:
+    """Test that source="tushare" correctly routes to Tushare provider."""
+
+    def test_tushare_source_returns_tushare_metadata(self):
+        """source=tushare should return actual_source=tushare in envelope."""
+        tool = FundFlowTool()
+        with patch.object(tool, '_execute_tushare') as mock_tushare:
+            mock_tushare.return_value = json.dumps({"ok": True, "source": "tushare"})
+            result = tool.execute(codes=["600519.SH"], source="tushare")
+            mock_tushare.assert_called_once()
+
+    def test_tushare_source_never_calls_eastmoney(self):
+        """source=tushare must NOT fall through to Eastmoney path."""
+        tool = FundFlowTool()
+        with patch('src.tools.fund_flow_tool._fetch_symbol_flow') as mock_em:
+            tool.execute(codes=["600519.SH"], source="tushare")
+            mock_em.assert_not_called()
+
+    def test_tushare_non_ashare_returns_error_not_routemismatch(self):
+        """Non-A-share with source=tushare should return per-symbol error, not route_mismatch."""
+        tool = FundFlowTool()
+        with patch.object(
+            tool, '_execute_tushare', return_value=json.dumps({
+                "ok": True,
+                "source": "tushare",
+                "data": {"AAPL.US": {"symbol": "AAPL.US", "error": "tushare moneyflow supports A-shares only"}},
+            })
+        ):
+            result = json.loads(tool.execute(codes=["AAPL.US"], source="tushare"))
+        assert result.get("ok") is True
+        assert result.get("source") == "tushare"
+        aapl = result["data"]["AAPL.US"]
+        assert "error" in aapl
+
+    def test_auto_source_uses_eastmoney(self):
+        """source=auto should use Eastmoney."""
+        tool = FundFlowTool()
+        with patch('src.tools.fund_flow_tool._fetch_symbol_flow') as mock_em:
+            mock_em.return_value = {"symbol": "600519.SH", "rows": []}
+            result = tool.execute(codes=["600519.SH"], source="auto")
+            mock_em.assert_called()
+
+    def test_envelope_contains_fetch_mode_live(self):
+        """Response envelope should contain fetch_mode='live'."""
+        tool = FundFlowTool()
+        with patch.object(
+            tool, '_execute_tushare', return_value=json.dumps({
+                "ok": True, "source": "tushare", "fetch_mode": "live",
+                "requested_source": "tushare", "actual_source": "tushare",
+            })
+        ):
+            result = json.loads(tool.execute(codes=["600519.SH"], source="tushare"))
+            assert result.get("fetch_mode") == "live"
+
+    def test_envelope_contains_request_id(self):
+        """Response envelope should contain a unique request_id."""
+        tool = FundFlowTool()
+        with patch.object(
+            tool, '_execute_tushare', return_value=json.dumps({
+                "ok": True, "source": "tushare", "request_id": "abc123",
+            })
+        ):
+            result = json.loads(tool.execute(codes=["600519.SH"], source="tushare"))
+            assert "request_id" in result
+            assert len(result["request_id"]) > 0
+
+    def test_two_consecutive_calls_have_different_request_ids(self):
+        """Two consecutive calls should produce different request_ids."""
+        tool = FundFlowTool()
+        with patch.object(
+            tool, '_execute_tushare',
+            side_effect=[
+                json.dumps({"ok": True, "source": "tushare", "request_id": "id1"}),
+                json.dumps({"ok": True, "source": "tushare", "request_id": "id2"}),
+            ]
+        ):
+            r1 = json.loads(tool.execute(codes=["600519.SH"], source="tushare"))
+            r2 = json.loads(tool.execute(codes=["600519.SH"], source="tushare"))
+            assert r1["request_id"] != r2["request_id"]
+
+    def test_eastmoney_envelope_has_observability_fields(self):
+        """Eastmoney path should contain requested_source, actual_source, fetch_mode, request_id."""
+        with patch(
+            "src.tools.fund_flow_tool.resolve_secid", return_value="1.600519"
+        ), patch(
+            "src.tools.fund_flow_tool.get_json", return_value=_DAILY_PAYLOAD
+        ):
+            text = FundFlowTool().execute(codes=["600519.SH"], source="auto")
+        payload = json.loads(text)
+        assert payload["requested_source"] == "auto"
+        assert payload["actual_source"] == "eastmoney"
+        assert payload["fetch_mode"] == "live"
+        assert "request_id" in payload
+        assert len(payload["request_id"]) > 0
+
+    def test_tushare_source_routes_to_tushare_not_eastmoney(self):
+        """When source='tushare', must route to _execute_tushare, not Eastmoney path."""
+        tool = FundFlowTool()
+        with patch.object(tool, '_execute_tushare') as mock_tushare:
+            mock_tushare.return_value = json.dumps({"ok": True, "source": "tushare"})
+            # Both auto and eastmoney go to Eastmoney, but tushare goes to _execute_tushare.
+            tool.execute(codes=["600519.SH"], source="auto")
+            mock_tushare.assert_not_called()
+            tool.execute(codes=["600519.SH"], source="eastmoney")
+            mock_tushare.assert_not_called()
+            tool.execute(codes=["600519.SH"], source="tushare")
+            mock_tushare.assert_called_once()

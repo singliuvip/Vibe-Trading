@@ -17,8 +17,8 @@ from src.agent.tools import BaseTool
 logger = logging.getLogger(__name__)
 
 
-@tool
-def get_auction_data(
+# 核心实现函数（无装饰器，可被 BaseTool.execute() 直接调用）
+def _execute_auction_data(
     session: str,
     codes: str = "",
     trade_date: str = "",
@@ -26,6 +26,7 @@ def get_auction_data(
     end_date: str = "",
     max_rows: int = 500,
     fields: str = "",
+    **kwargs: Any,
 ) -> str:
     """获取 A 股集合竞价数据（需要 Tushare 集合竞价成交 特权，15000+ 积分）。
 
@@ -88,6 +89,30 @@ def get_auction_data(
         )
 
 
+@tool
+def get_auction_data(
+    session: str,
+    codes: str = "",
+    trade_date: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    max_rows: int = 500,
+    fields: str = "",
+    **kwargs: Any,
+) -> str:
+    """获取 A 股集合竞价数据（需要 Tushare 集合竞价成交 特权，15000+ 积分）。"""
+    return _execute_auction_data(
+        session=session,
+        codes=codes,
+        trade_date=trade_date,
+        start_date=start_date,
+        end_date=end_date,
+        max_rows=max_rows,
+        fields=fields,
+        **kwargs,
+    )
+
+
 class TushareAuctionTool(BaseTool):
     """BaseTool adapter for get_auction_data."""
     name = "get_auction_data"
@@ -131,4 +156,4 @@ class TushareAuctionTool(BaseTool):
     is_readonly = True
 
     def execute(self, **kwargs: Any) -> str:
-        return get_auction_data(**kwargs)
+        return _execute_auction_data(**kwargs)

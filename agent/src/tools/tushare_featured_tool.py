@@ -59,6 +59,7 @@ def execute_featured_data_json(
     exchange_id: str = "",
     start_month: str = "",
     end_month: str = "",
+    **kwargs: Any,
 ) -> str:
     """查询 Tushare 特色数据（需要相应特权）。
 
@@ -259,6 +260,7 @@ def get_featured_data(
     exchange_id: str = "",
     start_month: str = "",
     end_month: str = "",
+    **kwargs: Any,
 ) -> str:
     """查询 Tushare 特色数据（需要相应特权）。"""
     return execute_featured_data_json(
@@ -285,6 +287,7 @@ def get_featured_data(
         exchange_id=exchange_id,
         start_month=start_month,
         end_month=end_month,
+        **kwargs,
     )
 
 

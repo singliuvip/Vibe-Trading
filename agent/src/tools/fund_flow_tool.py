@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from backtest.loaders.eastmoney_client import get_json, resolve_secid
@@ -224,10 +226,11 @@ class FundFlowTool(BaseTool):
         days = min(days, _MAX_DAYS)
 
         source = kwargs.get("source", "auto")
+        request_id = uuid.uuid4().hex
 
         # Tushare path: A-share only, single symbol at a time (batch w/ first)
         if source == "tushare":
-            return self._execute_tushare(codes, period, days)
+            return self._execute_tushare(codes, period, days, request_id)
 
         # Eastmoney path (default / auto)
         results = {
@@ -241,7 +244,15 @@ class FundFlowTool(BaseTool):
             "period": period,
             "buckets": list(_BUCKETS),
             "data": results,
+            "requested_source": source,
+            "actual_source": "eastmoney",
+            "fetch_mode": "live",
+            "request_id": request_id,
         }
+        # Defensive: if source was explicitly "tushare" but we're in the
+        # Eastmoney path (e.g. old Tool Registry without the route), flag it.
+        if source == "tushare":
+            envelope["route_mismatch"] = True
         return json.dumps(envelope, ensure_ascii=False)
 
     @staticmethod
@@ -251,13 +262,16 @@ class FundFlowTool(BaseTool):
         return suffix in ("SH", "SZ", "BJ")
 
     def _execute_tushare(
-        self, codes: list[str], period: str, days: int
+        self, codes: list[str], period: str, days: int, request_id: str = ""
     ) -> str:
         """Fetch fund flow via Tushare moneyflow endpoint.
 
         Tushare's moneyflow returns full rows per ts_code x trade_date.
         We filter client-side for daily period and cap rows.
         """
+        if not request_id:
+            request_id = uuid.uuid4().hex
+
         # Tushare moneyflow only supports daily frequency
         if period != "daily":
             return _error(
@@ -274,6 +288,10 @@ class FundFlowTool(BaseTool):
             )
         except RuntimeError as exc:
             return _error(f"Tushare not available: {exc}")
+
+        # Track the first successful symbol's metadata for the top-level envelope.
+        first_retrieved_at: str | None = None
+        first_endpoint: str | None = None
 
         results: dict[str, Any] = {}
         for code in (c.strip() for c in codes):
@@ -297,21 +315,40 @@ class FundFlowTool(BaseTool):
                     rows = rows[:days]
                 if len(rows) > _MAX_ROWS_PER_SYMBOL:
                     rows = rows[:_MAX_ROWS_PER_SYMBOL]
-                results[code] = {
+
+                meta = envelope.get("_meta", {})
+                retrieved_at = meta.get("retrieved_at", datetime.now(timezone.utc).isoformat())
+                endpoint = meta.get("endpoint", "moneyflow")
+
+                # Capture first symbol's metadata for the top-level envelope.
+                if first_retrieved_at is None:
+                    first_retrieved_at = retrieved_at
+                    first_endpoint = endpoint
+
+                per_symbol = {
                     "symbol": code,
                     "rows": rows,
                     "data_source": "tushare",
+                    "retrieved_at": retrieved_at,
+                    "endpoint": endpoint,
                 }
+                results[code] = per_symbol
             except Exception as exc:
                 logger.warning("tushare moneyflow failed for %s: %s", code, exc)
                 results[code] = {"symbol": code, "error": str(exc)}
 
-        envelope = {
+        envelope: dict[str, Any] = {
             "ok": True,
             "market": "stock",
             "source": "tushare",
             "period": "daily",
             "buckets": list(_BUCKETS),
             "data": results,
+            "requested_source": "tushare",
+            "actual_source": "tushare",
+            "fetch_mode": "live",
+            "request_id": request_id,
+            "endpoint": first_endpoint or "moneyflow",
+            "retrieved_at": first_retrieved_at or datetime.now(timezone.utc).isoformat(),
         }
         return json.dumps(envelope, ensure_ascii=False)

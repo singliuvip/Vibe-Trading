@@ -17,11 +17,12 @@ from src.agent.tools import BaseTool
 logger = logging.getLogger(__name__)
 
 
-@tool
-def get_realtime_minute_bars(
+# 核心实现函数（无装饰器，可被 BaseTool.execute() 直接调用）
+def _execute_realtime_minute_bars(
     codes: str,
     frequency: str = "1MIN",
     max_rows: int = 1000,
+    **kwargs: Any,
 ) -> str:
     """获取 A 股/ETF 当日实时分钟 K 线（需要 Tushare rt_min 正式权限）。
 
@@ -78,6 +79,22 @@ def get_realtime_minute_bars(
         )
 
 
+@tool
+def get_realtime_minute_bars(
+    codes: str,
+    frequency: str = "1MIN",
+    max_rows: int = 1000,
+    **kwargs: Any,
+) -> str:
+    """获取 A 股/ETF 当日实时分钟 K 线（需要 Tushare rt_min 正式权限）。"""
+    return _execute_realtime_minute_bars(
+        codes=codes,
+        frequency=frequency,
+        max_rows=max_rows,
+        **kwargs,
+    )
+
+
 class TushareRealtimeMinuteTool(BaseTool):
     """BaseTool adapter for get_realtime_minute_bars."""
     name = "get_realtime_minute_bars"
@@ -106,4 +123,4 @@ class TushareRealtimeMinuteTool(BaseTool):
     is_readonly = True
 
     def execute(self, **kwargs: Any) -> str:
-        return get_realtime_minute_bars(**kwargs)
+        return _execute_realtime_minute_bars(**kwargs)

@@ -17,12 +17,13 @@ from src.agent.tools import BaseTool
 logger = logging.getLogger(__name__)
 
 
-@tool
-def get_realtime_quotes(
+# 核心实现函数（无装饰器，可被 BaseTool.execute() 直接调用）
+def _execute_realtime_quotes(
     codes: str = "",
     patterns: str = "",
     fields: str = "",
     max_rows: int = 500,
+    **kwargs: Any,
 ) -> str:
     """获取 A 股盘中实时日K线快照（需要 Tushare A股日线RT 特权，15000+ 积分）。
 
@@ -70,6 +71,24 @@ def get_realtime_quotes(
         )
 
 
+@tool
+def get_realtime_quotes(
+    codes: str = "",
+    patterns: str = "",
+    fields: str = "",
+    max_rows: int = 500,
+    **kwargs: Any,
+) -> str:
+    """获取 A 股盘中实时日K线快照（需要 Tushare A股日线RT 特权，15000+ 积分）。"""
+    return _execute_realtime_quotes(
+        codes=codes,
+        patterns=patterns,
+        fields=fields,
+        max_rows=max_rows,
+        **kwargs,
+    )
+
+
 class TushareRealtimeTool(BaseTool):
     """BaseTool adapter for get_realtime_quotes."""
     name = "get_realtime_quotes"
@@ -100,4 +119,4 @@ class TushareRealtimeTool(BaseTool):
     is_readonly = True
 
     def execute(self, **kwargs: Any) -> str:
-        return get_realtime_quotes(**kwargs)
+        return _execute_realtime_quotes(**kwargs)

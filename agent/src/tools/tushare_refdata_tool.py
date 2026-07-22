@@ -31,11 +31,12 @@ def _error(message: str) -> str:
     return json.dumps({"ok": False, "error": message}, ensure_ascii=False)
 
 
-@tool
-def search_security_master(
+# 核心实现函数（无装饰器，可被 BaseTool.execute() 直接调用）
+def _execute_search_security_master(
     kind: str,
     market: str = "",
     list_status: str = "L",
+    **kwargs: Any,
 ) -> str:
     """查询证券主数据（股票/ETF/期权列表），需要 Tushare 基础数据权限。
 
@@ -85,6 +86,22 @@ def search_security_master(
     return json.dumps(envelope, ensure_ascii=False, indent=2, allow_nan=False)
 
 
+@tool
+def search_security_master(
+    kind: str,
+    market: str = "",
+    list_status: str = "L",
+    **kwargs: Any,
+) -> str:
+    """查询证券主数据（股票/ETF/期权列表），需要 Tushare 基础数据权限。"""
+    return _execute_search_security_master(
+        kind=kind,
+        market=market,
+        list_status=list_status,
+        **kwargs,
+    )
+
+
 class TushareRefDataTool(BaseTool):
     """BaseTool adapter for search_security_master."""
     name = "search_security_master"
@@ -113,4 +130,4 @@ class TushareRefDataTool(BaseTool):
     is_readonly = True
 
     def execute(self, **kwargs: Any) -> str:
-        return search_security_master(**kwargs)
+        return _execute_search_security_master(**kwargs)

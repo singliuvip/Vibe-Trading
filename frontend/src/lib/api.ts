@@ -1,4 +1,4 @@
-import { authHeaders, withAuthQuery } from "@/lib/apiAuth";
+import { authHeaders, withAuthTicket } from "@/lib/apiAuth";
 
 const BASE = "";
 
@@ -17,6 +17,11 @@ export const AUTH_REQUIRED_MESSAGE =
 
 export function isAuthRequiredError(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 401 || error.status === 403);
+}
+
+export interface CorrelationResponse {
+  labels: string[];
+  matrix: number[][];
 }
 
 async function errorFromResponse(res: Response): Promise<ApiError> {
@@ -84,6 +89,10 @@ function appendQueryParam(url: string, key: string, value: string): string {
 
 export const api = {
   uploadFile,
+  getCorrelation: (codes: string, days: number, method: "pearson" | "spearman") =>
+    request<CorrelationResponse>(
+      `/correlation?codes=${encodeURIComponent(codes)}&days=${encodeURIComponent(String(days))}&method=${encodeURIComponent(method)}`,
+    ),
   listRuns: (limit?: number) => request<RunListItem[]>(`/runs${limit ? `?limit=${encodeURIComponent(String(limit))}` : ""}`),
   getRun: (id: string, params: RunDetailParams = {}) => {
     const q = new URLSearchParams();
@@ -122,8 +131,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
+  // Returns the bare stream URL (no auth in the query string). The SSE ticket
+  // is minted per connect/reconnect inside useSSE (tickets are single-use, so
+  // baking one into a cached URL would break reconnection).
   sseUrl: (sid: string, options?: { replay?: "active" }) => {
-    let url = withAuthQuery(`${BASE}/sessions/${sid}/events`);
+    let url = `${BASE}/sessions/${sid}/events`;
     if (options?.replay) url = appendQueryParam(url, "replay", options.replay);
     return url;
   },
@@ -137,7 +149,7 @@ export const api = {
     }),
   listSwarmRuns: () => request<SwarmRunSummary[]>("/swarm/runs"),
   getSwarmRun: (id: string) => request<Record<string, unknown>>(`/swarm/runs/${id}`),
-  swarmSseUrl: (id: string) => withAuthQuery(`${BASE}/swarm/runs/${id}/events`),
+  swarmSseUrl: (id: string) => withAuthTicket(`${BASE}/swarm/runs/${id}/events`),
   cancelSwarmRun: (id: string) =>
     request<{ status: string }>(`/swarm/runs/${id}/cancel`, { method: "POST" }),
   retrySwarmRun: (id: string) =>
@@ -181,14 +193,14 @@ export const api = {
       body: JSON.stringify(body),
     }),
   alphaBenchStreamUrl: (jobId: string) =>
-    withAuthQuery(`${BASE}/alpha/bench/${encodeURIComponent(jobId)}/stream`),
+    withAuthTicket(`${BASE}/alpha/bench/${encodeURIComponent(jobId)}/stream`),
   createAlphaCompare: (body: AlphaCompareRequest) =>
     request<{ status: string; job_id: string }>("/alpha/compare", {
       method: "POST",
       body: JSON.stringify(body),
     }),
   alphaCompareStreamUrl: (jobId: string) =>
-    withAuthQuery(`${BASE}/alpha/compare/${encodeURIComponent(jobId)}/stream`),
+    withAuthTicket(`${BASE}/alpha/compare/${encodeURIComponent(jobId)}/stream`),
 
   // Connector runtime channel — privileged surface actions (NOT agent tools).
   // commit is the ONLY action that writes a mandate; halt trips the kill switch.
@@ -205,6 +217,10 @@ export const api = {
   // Read the persistent runtime status across all authorized brokers (SPEC §7.5).
   // Polled by the RunnerStatus panel; a plain authenticated GET, never a chat message.
   getLiveStatus: (signal?: AbortSignal) => request<LiveStatus>("/live/status", { signal }),
+  verifyConnector: (profileId: string) =>
+    request<ConnectorVerifyResponse>(`/live/connectors/${encodeURIComponent(profileId)}/verify?force=true`, {
+      method: "POST",
+    }),
   authorizeLive: (broker: string) =>
     request<LiveAuthorizeResponse>("/live/authorize", {
       method: "POST",
@@ -249,6 +265,7 @@ export interface LLMProviderOption {
   base_url_env: string;
   default_model: string;
   default_base_url: string;
+  base_url_options?: string[];
   api_key_required: boolean;
   auth_type?: string;
   login_command?: string | null;
@@ -938,6 +955,36 @@ export interface LiveBrokerAuthStatus {
   broker: string;
   oauth_token_present: boolean;
   is_live_broker: boolean;
+  /** Optional during rolling upgrades from OAuth-only runtime responses. */
+  profile_id?: string | null;
+  transport?: string | null;
+  connection_state?: string | null;
+  configured?: boolean | null;
+  credential_source?: string | null;
+  sdk_installed?: boolean | null;
+  last_checked_at?: string | null;
+  environment_identity?: string | null;
+  readonly?: boolean | null;
+  capabilities?: string[] | null;
+  error_code?: string | null;
+  error?: string | null;
+}
+
+export interface ConnectorVerifyResponse {
+  status?: string;
+  profile_id?: string | null;
+  transport?: string | null;
+  connection_state?: string | null;
+  configured?: boolean | null;
+  credential_source?: string | null;
+  sdk_installed?: boolean | null;
+  last_checked_at?: string | null;
+  environment_identity?: string | null;
+  readonly?: boolean | null;
+  capabilities?: string[] | null;
+  error_code?: string | null;
+  error?: string | null;
+  [key: string]: unknown;
 }
 
 /** One broker entry in the `GET /live/status` response. */

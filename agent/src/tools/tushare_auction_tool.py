@@ -1,6 +1,5 @@
 """Tool: ``get_auction_data`` — A-share call-auction data.
 
-Requires the Tushare "集合竞价成交" privilege (15000+ membership points).
 This tool is strictly read-only and returns JSON-serialized results.
 """
 
@@ -28,7 +27,7 @@ def _execute_auction_data(
     fields: str = "",
     **kwargs: Any,
 ) -> str:
-    """获取 A 股集合竞价数据（需要 Tushare 集合竞价成交 特权，15000+ 积分）。
+    """获取 A 股集合竞价数据（Tushare 集合竞价成交 实时数据）。
 
     Args:
         session: 竞价时段 — "current"（当日竞价 stk_auction）、"open"（开盘竞价历史 stk_auction_o）、"close"（收盘竞价历史 stk_auction_c）。
@@ -100,7 +99,7 @@ def get_auction_data(
     fields: str = "",
     **kwargs: Any,
 ) -> str:
-    """获取 A 股集合竞价数据（需要 Tushare 集合竞价成交 特权，15000+ 积分）。"""
+    """获取 A 股集合竞价数据（Tushare 集合竞价成交 实时数据）。"""
     return _execute_auction_data(
         session=session,
         codes=codes,

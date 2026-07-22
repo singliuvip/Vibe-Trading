@@ -424,9 +424,6 @@ def commit_mandate(
             "expires_at": expires_iso,
         },
     }
-    mandate_dir = broker_dir(broker, scope_account_id) if scope_account_id else broker_dir(broker)
-    _atomic_write_json(mandate_dir / _MANDATE_FILENAME, mandate_doc)
-
     consent_record = {
         "consent_record_id": consent_record_id,
         "mandate_id": mandate_id,
@@ -444,7 +441,13 @@ def commit_mandate(
         "created_at": created_iso,
         "expires_at": expires_iso,
     }
-    _atomic_write_json(_consent_dir(broker, scope_account_id) / f"{consent_record_id}.json", consent_record)
+    # Persist evidence before authority. If the consent write fails, no mandate
+    # becomes usable. If mandate publication fails afterward, the orphaned
+    # consent record is harmless and useful for audit/retry diagnosis.
+    consent_dir = _consent_dir(broker, scope_account_id) if scope_account_id else _consent_dir(broker)
+    _atomic_write_json(consent_dir / f"{consent_record_id}.json", consent_record)
+    mandate_dir = broker_dir(broker, scope_account_id) if scope_account_id else broker_dir(broker)
+    _atomic_write_json(mandate_dir / _MANDATE_FILENAME, mandate_doc)
 
     # One-shot: the proposal can never be committed again.
     _invalidate_proposal(broker, proposal_id, account_id=scope_account_id)

@@ -1,6 +1,5 @@
 """Tool: ``search_security_master`` — A-share security master data lookup.
 
-Requires Tushare basic data permission (stock_basic / fund_basic / opt_basic).
 This tool is strictly read-only and returns JSON-serialized results.
 """
 
@@ -38,7 +37,7 @@ def _execute_search_security_master(
     list_status: str = "L",
     **kwargs: Any,
 ) -> str:
-    """查询证券主数据（股票/ETF/期权列表），需要 Tushare 基础数据权限。
+    """查询证券主数据（股票/ETF/期权列表）。
 
     获取 A 股市场的证券列表：
     - ``kind="stock"``：股票列表，可按市场（SH/SZ/BJ）和上市状态过滤。
@@ -93,7 +92,7 @@ def search_security_master(
     list_status: str = "L",
     **kwargs: Any,
 ) -> str:
-    """查询证券主数据（股票/ETF/期权列表），需要 Tushare 基础数据权限。"""
+    """查询证券主数据（股票/ETF/期权列表）。"""
     return _execute_search_security_master(
         kind=kind,
         market=market,

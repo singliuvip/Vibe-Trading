@@ -9,6 +9,8 @@ Validates:
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -18,6 +20,7 @@ from backtest.metrics import (
     by_symbol_stats,
     calc_bars_per_year,
     calc_metrics,
+    calc_turnover_series,
     win_rate_and_stats,
 )
 from backtest.models import TradeRecord
@@ -264,6 +267,20 @@ class TestCalcMetrics:
         assert m["final_value"] == 1_000_000
         assert m["total_return"] == 0
 
+    def test_single_bar_equity_metrics_finite(self) -> None:
+        # A one-bar backtest yields a single-observation return series.
+        # ``Series.std()`` (ddof=1) is NaN for a single element, which used
+        # to poison Sharpe and the information ratio (Sortino was already
+        # guarded). Every risk metric must stay finite.
+        eq = pd.Series([1_000_000.0], index=pd.bdate_range("2025-01-01", periods=1))
+        bench_ret = pd.Series([0.0], index=eq.index)
+        m = calc_metrics(eq, [], 1_000_000, 252, bench_ret=bench_ret)
+        for key in ("sharpe", "sortino", "information_ratio",
+                    "annual_return", "max_drawdown", "calmar"):
+            assert math.isfinite(m[key]), f"{key} is not finite: {m[key]!r}"
+        assert m["sharpe"] == 0.0
+        assert m["information_ratio"] == 0.0
+
     def test_final_value(self) -> None:
         eq = self._growing_equity()
         m = calc_metrics(eq, [], 1_000_000, 252)
@@ -287,3 +304,116 @@ class TestCalcMetrics:
         # Calmar = annual_return / |max_drawdown|
         if m["annual_return"] > 0:
             assert m["calmar"] > 0
+
+    def test_zero_final_equity(self) -> None:
+        """A full wipeout (equity reaches 0) annualises to -100%, not a crash."""
+        dates = pd.bdate_range("2025-01-01", periods=252)
+        eq = pd.Series(np.linspace(1_000_000, 0.0, 252), index=dates)
+        m = calc_metrics(eq, [], 1_000_000, 252)
+        assert m["total_return"] == pytest.approx(-1.0)
+        assert m["annual_return"] == pytest.approx(-1.0)
+
+    def test_negative_final_equity_does_not_crash(self) -> None:
+        """A leveraged/short book can end below zero equity (total_return < -1).
+
+        ``(1 + total_return) ** fractional`` would raise a negative base to a
+        fractional power (a ``complex``) and crash ``float(...)``; the metric
+        must instead report a -100% annualised return.
+        """
+        dates = pd.bdate_range("2025-01-01", periods=252)
+        eq = pd.Series(np.linspace(1_000_000, -500_000, 252), index=dates)
+        m = calc_metrics(eq, [], 1_000_000, 252)
+        assert m["total_return"] == pytest.approx(-1.5)
+        assert m["annual_return"] == pytest.approx(-1.0)
+        assert m["final_value"] == pytest.approx(-500_000)
+
+    def test_explosive_equity_annualization_does_not_overflow(self) -> None:
+        """A 1 → 1e6 two-bar path overflows ``growth ** factor`` on CPython.
+
+        Metrics must stay defined (non-finite annual_return is acceptable).
+        """
+        eq = pd.Series([1.0, 1_000_000.0])
+        m = calc_metrics(eq, [], 1.0, 252)
+        assert m["total_return"] == pytest.approx(999_999.0)
+        assert m["annual_return"] == float("inf")
+
+
+# ---------------------------------------------------------------------------
+# turnover
+# ---------------------------------------------------------------------------
+
+
+class TestCalcTurnoverSeries:
+    def test_full_rotation_is_unit_turnover(self) -> None:
+        dates = pd.bdate_range("2025-01-01", periods=2)
+        pos = pd.DataFrame({"A": [1.0, 0.0], "B": [0.0, 1.0]}, index=dates)
+        s = calc_turnover_series(pos)
+        assert s.iloc[1] == pytest.approx(1.0)
+
+    def test_constant_weights_zero_after_entry(self) -> None:
+        dates = pd.bdate_range("2025-01-01", periods=4)
+        pos = pd.DataFrame({"A": [0.5] * 4, "B": [0.5] * 4}, index=dates)
+        s = calc_turnover_series(pos)
+        assert s.iloc[0] == pytest.approx(0.5)  # entry from cash: 0.5*(0.5+0.5)
+        assert s.iloc[1:].abs().max() == pytest.approx(0.0)
+
+    def test_first_bar_is_entry_from_cash(self) -> None:
+        dates = pd.bdate_range("2025-01-01", periods=1)
+        pos = pd.DataFrame({"A": [0.6], "B": [0.4]}, index=dates)
+        s = calc_turnover_series(pos)
+        assert s.iloc[0] == pytest.approx(0.5)
+
+    def test_empty_frame_returns_empty(self) -> None:
+        s = calc_turnover_series(pd.DataFrame())
+        assert s.empty
+
+    def test_nan_treated_as_zero(self) -> None:
+        dates = pd.bdate_range("2025-01-01", periods=2)
+        pos = pd.DataFrame({"A": [1.0, np.nan], "B": [0.0, 1.0]}, index=dates)
+        s = calc_turnover_series(pos)
+        assert s.iloc[1] == pytest.approx(1.0)
+
+
+class TestTurnoverMetrics:
+    def _equity(self) -> pd.Series:
+        dates = pd.bdate_range("2025-01-01", periods=4)
+        return pd.Series(np.linspace(1_000_000, 1_100_000, 4), index=dates)
+
+    def _positions(self) -> pd.DataFrame:
+        dates = pd.bdate_range("2025-01-01", periods=4)
+        return pd.DataFrame(
+            {"A": [1.0, 0.0, 1.0, 0.0], "B": [0.0, 1.0, 0.0, 1.0]}, index=dates
+        )
+
+    def test_turnover_keys_present(self) -> None:
+        m = calc_metrics(self._equity(), [], 1_000_000, 252, positions=self._positions())
+        assert "avg_turnover" in m and "total_turnover" in m
+
+    def test_total_equals_avg_times_bars(self) -> None:
+        pos = self._positions()
+        m = calc_metrics(self._equity(), [], 1_000_000, 252, positions=pos)
+        assert m["total_turnover"] == pytest.approx(m["avg_turnover"] * len(pos), rel=1e-6)
+
+    def test_positions_do_not_change_existing_metrics(self) -> None:
+        eq = self._equity()
+        without = calc_metrics(eq, [], 1_000_000, 252)
+        with_pos = calc_metrics(eq, [], 1_000_000, 252, positions=self._positions())
+        for key in without:
+            if key in ("avg_turnover", "total_turnover"):
+                continue
+            assert without[key] == with_pos[key]
+
+    def test_no_positions_zero_turnover(self) -> None:
+        m = calc_metrics(self._equity(), [], 1_000_000, 252)
+        assert m["avg_turnover"] == 0.0
+        assert m["total_turnover"] == 0.0
+
+    def test_empty_positions_zero_turnover(self) -> None:
+        m = calc_metrics(self._equity(), [], 1_000_000, 252, positions=pd.DataFrame())
+        assert m["avg_turnover"] == 0.0
+        assert m["total_turnover"] == 0.0
+
+    def test_empty_metrics_has_turnover_keys(self) -> None:
+        m = calc_metrics(pd.Series(dtype=float), [], 1_000_000, 252)
+        assert m["avg_turnover"] == 0.0
+        assert m["total_turnover"] == 0.0

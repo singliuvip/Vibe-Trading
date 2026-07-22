@@ -33,6 +33,7 @@ _registered = False
 VALID_SOURCES: set[str] = {
     "tushare",
     "okx",
+    "binance",
     "yfinance",
     "akshare",
     "baostock",
@@ -50,6 +51,8 @@ VALID_SOURCES: set[str] = {
     "fmp",
     "qveris",  # QVERIS-INTEGRATION
     "india_broker",
+    "longbridge",
+    "mt5",
     "local",
     "auto",
 }
@@ -79,6 +82,7 @@ def _ensure_registered() -> None:
     _loader_modules = [
         "backtest.loaders.tushare",
         "backtest.loaders.okx",
+        "backtest.loaders.binance_loader",
         "backtest.loaders.yfinance_loader",
         "backtest.loaders.akshare_loader",
         "backtest.loaders.baostock_loader",
@@ -96,6 +100,8 @@ def _ensure_registered() -> None:
         "backtest.loaders.fmp_loader",
         "backtest.loaders.qveris_loader",  # QVERIS-INTEGRATION
         "backtest.loaders.india_broker_loader",
+        "backtest.loaders.longbridge",
+        "backtest.loaders.mt5_loader",
         "backtest.loaders.local_loader",
     ]
     import importlib
@@ -124,15 +130,18 @@ _NO_NETWORK_FALLBACK_SOURCES: frozenset[str] = frozenset({"local", "qveris"})  #
 # (with Stooq/AKShare as 403 fallback), Eastmoney demoted to last resort due to
 # aggressive rate limiting.
 FALLBACK_CHAINS: dict[str, list[str]] = {
-    "a_share":   ["tushare", "tencent", "mootdx", "baostock", "akshare", "eastmoney", "local"],
-    "us_equity": ["yahoo", "stooq", "sina", "eastmoney", "yfinance", "tiingo", "fmp", "finnhub", "alphavantage", "akshare", "local"],
-    "hk_equity": ["yahoo", "akshare", "futu", "yfinance", "eastmoney", "local"],
+"a_share":   ["tushare", "tencent", "mootdx", "baostock", "akshare", "eastmoney", "local"],
+    "us_equity": ["yahoo", "stooq", "sina", "eastmoney", "yfinance", "tiingo", "fmp", "finnhub", "alphavantage", "longbridge", "akshare", "local"],
+    "hk_equity": ["yahoo", "akshare", "futu", "yfinance", "eastmoney", "longbridge", "local"],
     "india_equity": ["yahoo", "yfinance", "india_broker", "local"],
-    "crypto":    ["okx", "ccxt", "yfinance", "local"],
+    # OKX first (native), then dedicated Binance, then generic CCXT / Yahoo.
+    "crypto":    ["okx", "binance", "ccxt", "yfinance", "local"],
     "futures":   ["tushare", "akshare", "local"],
     "fund":      ["tushare", "akshare", "local"],
     "macro":     ["akshare", "tushare", "local"],
-    "forex":     ["akshare", "yfinance", "local"],
+    # mt5 leads when a local MetaTrader 5 terminal is attached (Windows-only,
+    # broker feed); otherwise it reports unavailable and the chain proceeds.
+    "forex":     ["mt5", "akshare", "yfinance", "local"],
 }
 
 

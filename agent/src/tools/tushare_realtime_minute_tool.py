@@ -1,6 +1,5 @@
 """Tool: ``get_realtime_minute_bars`` — A-share real-time minute K-line bars.
 
-Requires the Tushare "A股分钟RT" formal permission (separate from rt_k).
 This tool is strictly read-only and returns JSON-serialized results.
 """
 
@@ -24,7 +23,7 @@ def _execute_realtime_minute_bars(
     max_rows: int = 1000,
     **kwargs: Any,
 ) -> str:
-    """获取 A 股/ETF 当日实时分钟 K 线（需要 Tushare rt_min 正式权限）。
+    """获取 A 股/ETF 当日实时分钟 K 线（Tushare rt_min 实时数据）。
 
     Args:
         codes: 股票代码，逗号分隔，如 "600000.SH,000001.SZ"
@@ -86,7 +85,7 @@ def get_realtime_minute_bars(
     max_rows: int = 1000,
     **kwargs: Any,
 ) -> str:
-    """获取 A 股/ETF 当日实时分钟 K 线（需要 Tushare rt_min 正式权限）。"""
+    """获取 A 股/ETF 当日实时分钟 K 线（Tushare rt_min 实时数据）。"""
     return _execute_realtime_minute_bars(
         codes=codes,
         frequency=frequency,

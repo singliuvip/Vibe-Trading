@@ -1,4 +1,4 @@
-"""Service layer for Tushare advanced privilege data (rt_k + auction).
+"""Service layer for Tushare real-time market data (rt_k + auction).
 
 Provides:
 - ``TushareMarketDataService``: validation, rate-limiting, market-session

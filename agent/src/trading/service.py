@@ -23,7 +23,8 @@ _SDK_CONNECTOR_MODULES = {
     "dhan": "src.trading.connectors.dhan.sdk",
     "shoonya": "src.trading.connectors.shoonya.sdk",
     "trading212": "src.trading.connectors.trading212.sdk",
-    "virtual": "src.trading.connectors.virtual.sdk",
+"virtual": "src.trading.connectors.virtual.sdk",
+    "mt5": "src.trading.connectors.mt5.sdk",
 }
 
 
@@ -81,7 +82,7 @@ def get_account(profile_id: str | None = None, **overrides: Any) -> dict[str, An
     if profile.transport == "broker_sdk":
         module = _sdk_module(profile.connector)
         return _with_profile(profile, module.get_account_snapshot(module.build_config(profile.config, overrides)))
-    return _call_remote(profile, "account", {})
+    return _call_remote(profile, "account", _account_arg(overrides))
 
 
 def get_positions(profile_id: str | None = None, **overrides: Any) -> dict[str, Any]:
@@ -94,7 +95,7 @@ def get_positions(profile_id: str | None = None, **overrides: Any) -> dict[str, 
     if profile.transport == "broker_sdk":
         module = _sdk_module(profile.connector)
         return _with_profile(profile, module.get_positions(module.build_config(profile.config, overrides)))
-    return _call_remote(profile, "positions", {})
+    return _call_remote(profile, "positions", _account_arg(overrides))
 
 
 def get_open_orders(
@@ -120,7 +121,7 @@ def get_open_orders(
                 module.build_config(profile.config, overrides), include_executions=include_executions
             ),
         )
-    return _call_remote(profile, "orders", {})
+    return _call_remote(profile, "orders", _account_arg(overrides))
 
 
 def get_quote(
@@ -209,6 +210,9 @@ def get_history(
 
 #: Connector → (instrument type, fixed asset class | None). ``None`` asset class
 #: means "infer from the symbol's market" (multi-market equity connectors).
+#: ``mt5`` is deliberately absent: its symbols split into forex pairs vs CFDs,
+#: so classification is per-symbol via ``classify_mt5_symbol`` (see
+#: ``_order_classification``).
 _CONNECTOR_INSTRUMENT = {
     "okx": ("crypto", "crypto"),
     "binance": ("crypto", "crypto"),
@@ -237,9 +241,14 @@ def _order_classification(connector: str, symbol: str):
     instrument_name, asset_name = connector_instrument(connector)
     # Fallback: if registry returned default and legacy has a better answer
     if instrument_name == "equity" and asset_name is None:
-        leg = _CONNECTOR_INSTRUMENT.get(connector)
-        if leg is not None:
-            instrument_name, asset_name = leg
+        if connector == "mt5":
+            from src.trading.connectors.mt5.symbols import classify_mt5_symbol
+
+            # Forex pairs → (FOREX, FOREX); metals/indices/anything else → (CFD,
+            # None), which the mandate admits only via an explicit "cfd" allowance.
+            return classify_mt5_symbol(symbol)
+
+        instrument_name, asset_name = _CONNECTOR_INSTRUMENT.get(connector, ("equity", None))
     instrument = InstrumentType(instrument_name)
     if asset_name is not None:
         return instrument, AssetClass(asset_name)
@@ -508,6 +517,18 @@ def _remote_status(profile: TradingProfile) -> dict[str, Any]:
     }
 
 
+def _account_arg(overrides: dict[str, Any]) -> dict[str, Any]:
+    """Build the arguments dict a remote MCP account/positions/orders call needs.
+
+    The CLI ``--account`` flag and the agent-facing tools both surface as an
+    ``account`` key in ``overrides``. Remote connectors (e.g. Robinhood) expect
+    ``account_number`` on the wire; this normalizes that once here instead of
+    duplicating the mapping at each call site.
+    """
+    account = overrides.get("account") or overrides.get("account_number")
+    return {"account_number": account} if account else {}
+
+
 def _call_remote(profile: TradingProfile, operation: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Call a known read operation on a remote MCP connector profile."""
     from src.config.loader import load_agent_config
@@ -566,10 +587,12 @@ def _call_remote(profile: TradingProfile, operation: str, arguments: dict[str, A
         }
 
     adapter = MCPServerAdapter(server_name, server)
-    return _with_profile(
-        profile,
-        adapter.call_tool(remote_name, _remote_arguments(profile.connector, operation, arguments)),
-    )
+    call_result = adapter.call_tool(remote_name, _remote_arguments(profile.connector, operation, arguments))
+    account_number = arguments.get("account_number")
+    if account_number:
+        call_result = dict(call_result)
+        call_result.setdefault("account_number", account_number)
+    return _with_profile(profile, call_result)
 
 
 def _remote_tool_name(connector: str, operation: str) -> str | None:

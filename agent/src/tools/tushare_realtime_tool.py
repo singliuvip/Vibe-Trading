@@ -1,6 +1,5 @@
 """Tool: ``get_realtime_quotes`` — A-share real-time daily K-line snapshots.
 
-Requires the Tushare "A股日线RT" privilege (15000+ membership points).
 This tool is strictly read-only and returns JSON-serialized results.
 """
 
@@ -25,7 +24,7 @@ def _execute_realtime_quotes(
     max_rows: int = 500,
     **kwargs: Any,
 ) -> str:
-    """获取 A 股盘中实时日K线快照（需要 Tushare A股日线RT 特权，15000+ 积分）。
+    """获取 A 股盘中实时日K线快照（Tushare A股日线RT 实时数据）。
 
     Args:
         codes: 股票代码列表，逗号分隔，如 "000001.SZ,600519.SH"（最多50个）。
@@ -79,7 +78,7 @@ def get_realtime_quotes(
     max_rows: int = 500,
     **kwargs: Any,
 ) -> str:
-    """获取 A 股盘中实时日K线快照（需要 Tushare A股日线RT 特权，15000+ 积分）。"""
+    """获取 A 股盘中实时日K线快照（Tushare A股日线RT 实时数据）。"""
     return _execute_realtime_quotes(
         codes=codes,
         patterns=patterns,

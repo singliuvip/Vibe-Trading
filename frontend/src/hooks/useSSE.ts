@@ -3,6 +3,7 @@
  */
 
 import { useCallback, useRef } from "react";
+import { getApiAuthKey, withAuthTicket } from "@/lib/apiAuth";
 
 type EventHandler = (data: Record<string, unknown>) => void;
 type Handlers = Record<string, EventHandler>;
@@ -34,6 +35,7 @@ export function useSSE(config?: SSEConfig) {
   const lastEventIdRef = useRef<string | null>(null);
   const statusRef = useRef<SSEStatus>("disconnected");
   const onStatusChangeRef = useRef<((s: SSEStatus) => void) | null>(null);
+  const generationRef = useRef(0);
 
   // LRU dedup set
   const seenIdsRef = useRef<Set<string>>(new Set());
@@ -66,14 +68,16 @@ export function useSSE(config?: SSEConfig) {
     return baseUrl;
   }, []);
 
-  const doConnect = useCallback(() => {
-    if (closedRef.current) return;
+  const attach = useCallback((url: string, generation: number) => {
+    if (closedRef.current || generation !== generationRef.current) return;
 
-    const url = buildUrl(urlRef.current);
     const source = new EventSource(url);
     sourceRef.current = source;
 
     source.onopen = () => {
+      if (generation !== generationRef.current || sourceRef.current !== source) {
+        return;
+      }
       retryCountRef.current = 0;
       setStatus("connected");
     };
@@ -91,6 +95,9 @@ export function useSSE(config?: SSEConfig) {
     ];
 
     const handleRaw = (eventType: string, raw: MessageEvent) => {
+      if (generation !== generationRef.current || sourceRef.current !== source) {
+        return;
+      }
       if (raw.lastEventId) {
         lastEventIdRef.current = raw.lastEventId;
       }
@@ -112,15 +119,43 @@ export function useSSE(config?: SSEConfig) {
     }
 
     source.onerror = () => {
-      if (closedRef.current) return;
+      if (
+        closedRef.current ||
+        generation !== generationRef.current ||
+        sourceRef.current !== source
+      ) {
+        return;
+      }
       source.close();
       sourceRef.current = null;
-      scheduleReconnect();
+      scheduleReconnect(generation);
     };
-  }, [buildUrl, trackEventId, setStatus]);
+  }, [trackEventId, setStatus]);
 
-  const scheduleReconnect = useCallback(() => {
-    if (closedRef.current) return;
+  const doConnect = useCallback((generation: number) => {
+    if (closedRef.current || generation !== generationRef.current) return;
+
+    const baseUrl = buildUrl(urlRef.current);
+
+    // When an API key is stored we must first mint a single-use SSE ticket —
+    // EventSource can't send an Authorization header. In loopback dev mode (no
+    // key) the backend bypasses auth, so we connect synchronously and preserve
+    // the original zero-round-trip behavior (and the synchronous test path).
+    if (!getApiAuthKey()) {
+      attach(baseUrl, generation);
+      return;
+    }
+    withAuthTicket(baseUrl)
+      .then((url) => attach(url, generation))
+      .catch(() => {
+        if (!closedRef.current && generation === generationRef.current) {
+          scheduleReconnect(generation);
+        }
+      });
+  }, [buildUrl, attach]);
+
+  const scheduleReconnect = useCallback((generation: number) => {
+    if (closedRef.current || generation !== generationRef.current) return;
     retryCountRef.current += 1;
     const delay = Math.min(
       opts.initialRetryMs * Math.pow(opts.backoffFactor, retryCountRef.current - 1),
@@ -131,11 +166,14 @@ export function useSSE(config?: SSEConfig) {
 
     retryTimerRef.current = setTimeout(() => {
       retryTimerRef.current = null;
-      doConnect();
+      if (generation === generationRef.current) {
+        doConnect(generation);
+      }
     }, delay);
   }, [opts.initialRetryMs, opts.backoffFactor, opts.maxRetryMs, setStatus, doConnect]);
 
   const connect = useCallback((url: string, handlers: Handlers) => {
+    const generation = ++generationRef.current;
     closedRef.current = true;
     sourceRef.current?.close();
     if (retryTimerRef.current) {
@@ -151,10 +189,11 @@ export function useSSE(config?: SSEConfig) {
     seenIdsRef.current.clear();
     seenOrderRef.current.length = 0;
 
-    doConnect();
+    doConnect(generation);
   }, [doConnect]);
 
   const disconnect = useCallback(() => {
+    generationRef.current += 1;
     closedRef.current = true;
     if (retryTimerRef.current) {
       clearTimeout(retryTimerRef.current);

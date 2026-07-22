@@ -129,19 +129,23 @@ def test_configured_api_key_accepts_bearer_for_sensitive_reads(
     assert response.status_code == 200
 
 
-def test_loopback_bypasses_auth_even_when_api_key_configured(
+def test_loopback_requires_auth_when_api_key_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Loopback clients remain trusted for non-settings reads."""
+    """GHSA-7wgj: a configured key gates EVERY peer, loopback included."""
     monkeypatch.setenv("API_AUTH_KEY", "secret")
     monkeypatch.setattr(api_server, "_API_KEY", "secret")
 
     local = _local_client()
     remote = _remote_client()
 
-    # Loopback: no bearer needed → should succeed
+    # Loopback without bearer: no longer bypasses the configured key → rejected
     local_response = local.get("/runs")
-    assert local_response.status_code == 200
+    assert local_response.status_code == 401
+
+    # Loopback with bearer: accepted (this is the frontend's authenticated path)
+    local_bearer = local.get("/runs", headers={"Authorization": "Bearer secret"})
+    assert local_bearer.status_code == 200
 
     # Remote without bearer: still rejected
     remote_response = remote.get("/runs")
@@ -351,14 +355,30 @@ def test_configured_api_key_required_for_session_event_stream(
     assert response.status_code == 401
 
 
-def test_session_event_stream_accepts_query_token_for_browser_eventsource(
+def test_session_event_stream_rejects_long_lived_api_key_query(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """VT-003: the long-lived key is no longer accepted in the SSE query string."""
     monkeypatch.setenv("API_AUTH_KEY", "secret")
     monkeypatch.setattr(api_server, "_API_KEY", "secret")
 
     response = _remote_client().get("/sessions/missing/events?api_key=secret")
 
+    assert response.status_code == 401
+
+
+def test_session_event_stream_accepts_single_use_ticket_for_browser_eventsource(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VT-003: a header-minted single-use ticket authenticates the EventSource."""
+    monkeypatch.setenv("API_AUTH_KEY", "secret")
+    monkeypatch.setattr(api_server, "_API_KEY", "secret")
+
+    ticket = api_server._mint_sse_ticket()
+    response = _remote_client().get(f"/sessions/missing/events?ticket={ticket}")
+
+    # Auth passed (the 404/501 comes from the missing session / disabled runtime,
+    # not from the auth layer).
     assert response.status_code in {404, 501}
 
 

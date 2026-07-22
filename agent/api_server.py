@@ -9,7 +9,6 @@ infrastructure lives in ``src.api.{security,models,helpers,state}``.
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -39,8 +38,10 @@ from src.api.security import (  # noqa: F401, E402
     _DEFAULT_LOOPBACK_HOSTS,
     _EXTRA_LOOPBACK_HOSTS,
     _SAFE_BROWSER_METHODS,
+    _apply_security_headers,
     _auth_credential_from_header_or_query,
     _configured_api_key,
+    _consume_sse_ticket,
     _default_gateway_ips,
     _env_shell_tools_enabled,
     _host_without_port,
@@ -48,9 +49,11 @@ from src.api.security import (  # noqa: F401, E402
     _is_local_client,
     _is_loopback_bind_host,
     _is_loopback_origin,
+    _mint_sse_ticket,
     _origin_matches_request_host,
     _parse_cors_origins,
     _parse_extra_loopback_hosts,
+    _redact_query_secrets,
     _reject_cross_site_browser_request,
     _reject_untrusted_loopback_host,
     _require_shutdown_authorization,
@@ -58,6 +61,7 @@ from src.api.security import (  # noqa: F401, E402
     _shell_tools_enabled_for_request,
     _trusted_docker_loopback_ip,
     _validate_api_auth,
+    install_access_log_redaction_filter,
     require_auth,
     require_event_stream_auth,
     require_local_or_auth,
@@ -76,6 +80,7 @@ from src.api.helpers import (  # noqa: F401, E402
     AGENT_DIR,
     ENV_EXAMPLE_PATH,
     ENV_PATH,
+    LEGACY_ENV_PATH,
     RUNS_DIR,
     SESSIONS_DIR,
     UPLOADS_DIR,
@@ -132,6 +137,7 @@ app.add_middleware(
 # programmatically instead.
 app.middleware("http")(_reject_untrusted_loopback_host)
 app.middleware("http")(_spa_html_deep_link_fallback)
+app.middleware("http")(_apply_security_headers)
 
 # ============================================================================
 # Lifecycle hooks
@@ -281,11 +287,17 @@ from src.api.live_routes import (  # noqa: F401, E402
     _live_broker_adapter,
     _build_live_runner,
     _drive_runner,
+    _connector_verify_cache,
+    _check_connector_status,
 )
 
 # --- Alpha Zoo ---
 from src.api.alpha_routes import register_alpha_routes  # noqa: E402
 register_alpha_routes(app)
+
+# --- Auth helpers (SSE tickets) ---
+from src.api.auth_routes import register_auth_routes  # noqa: E402
+register_auth_routes(app)
 
 
 # ============================================================================
@@ -375,6 +387,11 @@ def serve_main(argv: list[str] | None = None) -> int:
     print("  Vibe-Trading Server")
     print(f"  http://127.0.0.1:{args.port}")
     print("=" * 50)
+
+    # Redact api_key=/ticket= values from Uvicorn's access log (it logs the full
+    # request line including the query string). Installed before run() so the
+    # filter is attached when Uvicorn configures its loggers.
+    install_access_log_redaction_filter()
 
     try:
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")

@@ -1,7 +1,8 @@
 import i18n from '@/i18n';
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { BarChart3 } from "lucide-react";
 import { CorrelationMatrix } from "@/components/charts/CorrelationMatrix";
+import { api } from "@/lib/api";
 
 const WINDOWS = [30, 60, 90, 180, 365] as const;
 
@@ -14,20 +15,34 @@ export function Correlation() {
 
   const [labels, setLabels] = useState<string[]>([]);
   const [matrix, setMatrix] = useState<number[][]>([]);
+  const requestGeneration = useRef(0);
+
+  const invalidateResult = () => {
+    requestGeneration.current += 1;
+    setLabels([]);
+    setMatrix([]);
+    setError(null);
+    setLoading(false);
+  };
 
   const compute = async () => {
+    const generation = ++requestGeneration.current;
     setError(null);
+    setLabels([]);
+    setMatrix([]);
     setLoading(true);
     try {
-      const result = await request<{ labels: string[]; matrix: number[][] }>(
-        `/correlation?codes=${encodeURIComponent(codes)}&days=${days}&method=${method}`
-      );
-      setLabels(result.labels);
-      setMatrix(result.matrix);
+      const result = await api.getCorrelation(codes, days, method);
+      if (requestGeneration.current === generation) {
+        setLabels(result.labels);
+        setMatrix(result.matrix);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : i18n.t("correlation.failedToCompute"));
+      if (requestGeneration.current === generation) {
+        setError(e instanceof Error ? e.message : i18n.t("correlation.failedToCompute"));
+      }
     } finally {
-      setLoading(false);
+      if (requestGeneration.current === generation) setLoading(false);
     }
   };
 
@@ -46,7 +61,10 @@ export function Correlation() {
           <input
             type="text"
             value={codes}
-            onChange={(e) => setCodes(e.target.value)}
+            onChange={(e) => {
+              invalidateResult();
+              setCodes(e.target.value);
+            }}
             placeholder="000001.SZ,600519.SH,000858.SZ"
             className="w-full px-3 py-2 rounded-md border bg-background text-sm"
           />
@@ -62,7 +80,10 @@ export function Correlation() {
               {WINDOWS.map((w) => (
                 <button
                   key={w}
-                  onClick={() => setDays(w)}
+                  onClick={() => {
+                    invalidateResult();
+                    setDays(w);
+                  }}
                   className={`px-3 py-1.5 rounded text-sm border transition-colors ${
                     days === w
                       ? "bg-primary text-primary-foreground"
@@ -81,7 +102,10 @@ export function Correlation() {
               {(["pearson", "spearman"] as const).map((m) => (
                 <button
                   key={m}
-                  onClick={() => setMethod(m)}
+                  onClick={() => {
+                    invalidateResult();
+                    setMethod(m);
+                  }}
                   className={`px-3 py-1.5 rounded text-sm border transition-colors capitalize ${
                     method === m
                       ? "bg-primary text-primary-foreground"
@@ -115,23 +139,4 @@ export function Correlation() {
       {labels.length > 0 && <CorrelationMatrix labels={labels} matrix={matrix} height={520} />}
     </div>
   );
-}
-
-// Minimal request helper (avoids importing the full api client which may have path issues)
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const BASE = "";
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    ...options,
-  });
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try {
-      const body = await res.json();
-      detail = body.detail || body.message || detail;
-    } catch { /* ignore */ }
-    throw new Error(detail);
-  }
-  const text = await res.text();
-  return text ? JSON.parse(text) : ({} as T);
 }

@@ -19,15 +19,16 @@ from backtest.models import TradeRecord
 # sessions are marginally longer (~330 min) — an approximation in line with the
 # rest of this annualisation table; the key fix is that intraday mootdx/futu no
 # longer fall back to the bars_per_day=1 default, which mis-annualised vol/Sharpe.
-_TRADING_DAYS = {"tushare": 252, "yfinance": 252, "okx": 365, "akshare": 252, "ccxt": 365, "mootdx": 252, "futu": 252}
+_TRADING_DAYS = {"tushare": 252, "yfinance": 252, "okx": 365, "akshare": 252, "ccxt": 365, "mootdx": 252, "futu": 252, "mt5": 260}
+# mt5 is a forex/CFD feed: 24x5 sessions → 260 trading days, 24h intraday bars.
 _BARS_PER_DAY = {
-    "1m":  {"tushare": 240, "okx": 1440, "yfinance": 390, "akshare": 240, "ccxt": 1440, "mootdx": 240, "futu": 240},
-    "5m":  {"tushare": 48,  "okx": 288,  "yfinance": 78,  "akshare": 48,  "ccxt": 288,  "mootdx": 48,  "futu": 48},
-    "15m": {"tushare": 16,  "okx": 96,   "yfinance": 26,  "akshare": 16,  "ccxt": 96,   "mootdx": 16,  "futu": 16},
-    "30m": {"tushare": 8,   "okx": 48,   "yfinance": 13,  "akshare": 8,   "ccxt": 48,   "mootdx": 8,   "futu": 8},
-    "1H":  {"tushare": 4,   "okx": 24,   "yfinance": 7,   "akshare": 4,   "ccxt": 24,   "mootdx": 4,   "futu": 4},
-    "4H":  {"tushare": 1,   "okx": 6,    "yfinance": 2,   "akshare": 1,   "ccxt": 6,    "mootdx": 1,   "futu": 1},
-    "1D":  {"tushare": 1,   "okx": 1,    "yfinance": 1,   "akshare": 1,   "ccxt": 1,    "mootdx": 1,   "futu": 1},
+    "1m":  {"tushare": 240, "okx": 1440, "yfinance": 390, "akshare": 240, "ccxt": 1440, "mootdx": 240, "futu": 240, "mt5": 1440},
+    "5m":  {"tushare": 48,  "okx": 288,  "yfinance": 78,  "akshare": 48,  "ccxt": 288,  "mootdx": 48,  "futu": 48,  "mt5": 288},
+    "15m": {"tushare": 16,  "okx": 96,   "yfinance": 26,  "akshare": 16,  "ccxt": 96,   "mootdx": 16,  "futu": 16,  "mt5": 96},
+    "30m": {"tushare": 8,   "okx": 48,   "yfinance": 13,  "akshare": 8,   "ccxt": 48,   "mootdx": 8,   "futu": 8,   "mt5": 48},
+    "1H":  {"tushare": 4,   "okx": 24,   "yfinance": 7,   "akshare": 4,   "ccxt": 24,   "mootdx": 4,   "futu": 4,   "mt5": 24},
+    "4H":  {"tushare": 1,   "okx": 6,    "yfinance": 2,   "akshare": 1,   "ccxt": 6,    "mootdx": 1,   "futu": 1,   "mt5": 6},
+    "1D":  {"tushare": 1,   "okx": 1,    "yfinance": 1,   "akshare": 1,   "ccxt": 1,    "mootdx": 1,   "futu": 1,   "mt5": 1},
 }
 
 
@@ -148,12 +149,82 @@ def by_exit_reason_stats(trades: List[TradeRecord]) -> Dict[str, Dict[str, Any]]
     return result
 
 
+def calc_turnover_series(positions: pd.DataFrame) -> pd.Series:
+    """Per-bar weight-implied portfolio turnover from a position frame.
+
+    Turnover for a bar is ``0.5 * sum_i |w_{t,i} - w_{t-1,i}|``, so a full
+    rotation from one asset to another counts as 1.0 (matching the
+    ``turnover_aware`` optimizer's convention). The first bar's turnover is
+    ``0.5 * sum_i |w_{0,i}|``, treating the initial allocation as entry from
+    cash. Turnover is measured on the weight frame the caller supplies. It
+    does not know whether the execution engine filled, rounded, or rejected
+    those target positions.
+
+    Args:
+        positions: Position-weight matrix (index=timestamp, columns=codes).
+
+    Returns:
+        Per-bar turnover series indexed like ``positions``; empty when the
+        input is empty.
+    """
+    if positions is None or positions.empty:
+        return pd.Series(dtype=float)
+    filled = positions.fillna(0.0)
+    prev = filled.shift(1).fillna(0.0)
+    return 0.5 * (filled - prev).abs().sum(axis=1)
+
+
+def calc_trade_turnover_series(
+    trades: List[TradeRecord],
+    equity_curve: pd.Series,
+) -> pd.Series:
+    """Per-bar turnover from actual entry and exit allocations.
+
+    Each filled leg contributes its margin-equivalent traded value. Dividing
+    gross traded value by twice the portfolio equity preserves the existing
+    convention: entering a 100% allocation counts as 0.5 and rotating a 100%
+    allocation between two assets counts as 1.0.
+
+    Args:
+        trades: Completed trades carrying actual entry/exit margin values.
+        equity_curve: Portfolio equity used to normalize traded values.
+
+    Returns:
+        Per-bar realized turnover aligned to ``equity_curve``. Bars without
+        fills are zero and remain part of the average-turnover denominator.
+    """
+    if equity_curve is None or equity_curve.empty:
+        return pd.Series(dtype=float)
+
+    traded_margin = pd.Series(0.0, index=equity_curve.index, dtype=float)
+    for trade in trades:
+        for timestamp, margin in (
+            (trade.entry_time, trade.entry_margin),
+            (trade.exit_time, trade.exit_margin),
+        ):
+            try:
+                margin_value = float(margin)
+            except (TypeError, ValueError):
+                continue
+            if (
+                timestamp in traded_margin.index
+                and np.isfinite(margin_value)
+                and margin_value > 0
+            ):
+                traded_margin.loc[timestamp] += margin_value
+
+    denominator = 2.0 * equity_curve.abs().replace(0.0, np.nan)
+    return (traded_margin / denominator).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+
 def calc_metrics(
     equity_curve: pd.Series,
     trades: List[TradeRecord],
     initial_cash: float,
     bars_per_year: Optional[int] = 252,
     bench_ret: Optional[pd.Series] = None,
+    positions: Optional[pd.DataFrame] = None,
+    turnover_series: Optional[pd.Series] = None,
 ) -> Dict[str, Any]:
     """Full set of performance metrics.
 
@@ -164,6 +235,10 @@ def calc_metrics(
         bars_per_year: Bars per year for annualisation. None = auto-detect
             from equity curve dates (calendar-day method, for cross-market).
         bench_ret: Benchmark per-bar return series (optional).
+        positions: Position-weight frame used as a backward-compatible
+            turnover fallback when ``turnover_series`` is not supplied.
+        turnover_series: Actual per-bar execution turnover (optional). When
+            supplied, it takes precedence over position-implied turnover.
 
     Returns:
         Metrics dictionary (compatible with daily_portfolio format).
@@ -185,8 +260,26 @@ def calc_metrics(
     port_ret = equity_curve.pct_change().fillna(0.0)
 
     total_ret = float(equity_curve.iloc[-1] / initial_cash - 1)
-    ann_ret = float((1 + total_ret) ** (bpy / max(n, 1)) - 1)
-    vol = float(port_ret.std())
+    # A leveraged/short book can end at or below zero equity (``total_ret <= -1``).
+    # ``(1 + total_ret) ** fractional`` would then raise a negative base to a
+    # fractional power, which Python evaluates to a ``complex`` and crashes the
+    # subsequent ``float(...)``. A total wipeout annualises to -100%.
+    growth = 1 + total_ret
+    if growth <= 0:
+        ann_ret = -1.0
+    else:
+        # Explosive equity paths (e.g. 1 → 1e6 in a few bars) overflow
+        # ``float(growth ** …)`` on CPython; treat as non-finite annualisation.
+        try:
+            ann_ret = float(growth ** (bpy / max(n, 1)) - 1)
+        except OverflowError:
+            ann_ret = float("inf")
+        if not np.isfinite(ann_ret):
+            ann_ret = float("inf")
+    # ``Series.std()`` uses ddof=1, so a single-observation return series
+    # (e.g. a one-bar backtest) yields NaN and poisons the Sharpe ratio.
+    # Guard the small sample the same way ``downside_std`` is guarded below.
+    vol = float(port_ret.std()) if len(port_ret) > 1 else 0.0
     sharpe = float(port_ret.mean() / (vol + 1e-10) * np.sqrt(bpy))
 
     # Drawdown
@@ -203,6 +296,18 @@ def calc_metrics(
 
     trade_stats = win_rate_and_stats(trades)
 
+    # Prefer execution-derived turnover; retain the position-frame fallback
+    # for external callers of calc_metrics that do not have fill records.
+    turnover_values = (
+        turnover_series.reindex(equity_curve.index).fillna(0.0).clip(lower=0.0)
+        if turnover_series is not None
+        else calc_turnover_series(positions)
+        if positions is not None
+        else pd.Series(dtype=float)
+    )
+    avg_turnover = float(turnover_values.mean()) if len(turnover_values) > 0 else 0.0
+    total_turnover = float(turnover_values.sum()) if len(turnover_values) > 0 else 0.0
+
     # Benchmark comparison
     bench_return = 0.0
     excess = 0.0
@@ -211,7 +316,9 @@ def calc_metrics(
         bench_return = float((1 + bench_ret).prod() - 1)
         excess = total_ret - bench_return
         active_ret = port_ret - bench_ret.reindex(port_ret.index).fillna(0.0)
-        active_std = float(active_ret.std())
+        # Same ddof=1 small-sample guard as ``vol`` / ``downside_std`` so the
+        # information ratio stays finite for a single-observation series.
+        active_std = float(active_ret.std()) if len(active_ret) > 1 else 0.0
         ir = float(active_ret.mean() / (active_std + 1e-10) * np.sqrt(bpy))
 
     return {
@@ -231,6 +338,8 @@ def calc_metrics(
         "benchmark_return": round(bench_return, 6),
         "excess_return": round(excess, 6),
         "information_ratio": round(ir, 4),
+        "avg_turnover": round(avg_turnover, 6),
+        "total_turnover": round(total_turnover, 6),
     }
 
 
@@ -243,4 +352,5 @@ def _empty_metrics(initial_cash: float) -> Dict[str, Any]:
         "win_rate": 0, "profit_loss_ratio": 0, "profit_factor": 0,
         "max_consecutive_loss": 0, "avg_holding_days": 0, "trade_count": 0,
         "benchmark_return": 0, "excess_return": 0, "information_ratio": 0,
+        "avg_turnover": 0.0, "total_turnover": 0.0,
     }

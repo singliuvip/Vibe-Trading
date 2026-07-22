@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Dict
 
@@ -23,7 +25,8 @@ RUNS_DIR = _AGENT_DIR / "runs"
 SESSIONS_DIR = _AGENT_DIR / "sessions"
 UPLOADS_DIR = _AGENT_DIR / "uploads"
 AGENT_DIR = _AGENT_DIR
-ENV_PATH = AGENT_DIR / ".env"
+ENV_PATH = Path.home() / ".vibe-trading" / ".env"
+LEGACY_ENV_PATH = AGENT_DIR / ".env"
 ENV_EXAMPLE_PATH = AGENT_DIR / ".env.example"
 
 
@@ -64,21 +67,85 @@ async def _spa_html_deep_link_fallback(request: Request, call_next):
 # ============================================================================
 
 
-def _ensure_agent_env_file() -> Path:
-    """Ensure the project-local agent/.env exists."""
-    env_path = _host_attr("ENV_PATH", ENV_PATH)
+def _atomic_write_secret(path: Path, content: str) -> None:
+    """Write *content* to *path* atomically with 0600 permissions.
+
+    The file holds provider API keys, so a crash mid-write must never leave a
+    half-written or world-readable secret. The primary path writes to a sibling
+    temp file (created 0600 by ``mkstemp``) and ``os.replace``s it onto the
+    target — an atomic swap on the same filesystem.
+
+    Fallback: when the parent directory is read-only (the ``.env`` is
+    bind-mounted into a container whose rootfs is ``read_only: true``, so no
+    sibling temp file can be created) the swap is impossible. There we write in
+    place, still enforcing 0600; atomicity is sacrificed for that one edge but
+    the secret still persists and stays owner-only.
+    """
+    data = content.encode("utf-8")
+    try:
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".env.", suffix=".tmp")
+    except OSError:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        return
+    try:
+        os.write(fd, data)
+        # ``os.fchmod`` is unavailable on Windows.  Keep descriptor-level
+        # permission hardening on platforms that support it, then use the
+        # portable path-based best effort after the descriptor is closed.
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        # Windows ACLs govern effective access and chmod may be unsupported
+        # or map only to the read-only flag.
+        pass
+    try:
+        os.replace(tmp, path)
+    except BaseException:
+        # Never leave a stray temp file holding the secret behind.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _ensure_agent_env_file(path: Path | None = None) -> Path:
+    """Ensure the selected settings dotenv exists with private permissions."""
+    env_path = path or _host_attr("ENV_PATH", ENV_PATH)
+    env_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if not env_path.exists():
-        env_path.write_text("# Created by Vibe-Trading Web UI settings.\n", encoding="utf-8")
+        _atomic_write_secret(env_path, "# Created by Vibe-Trading Web UI settings.\n")
     return env_path
 
 
 def _strip_env_value(value: str) -> str:
     """Remove basic dotenv quotes and inline comments."""
     value = value.strip()
+    if value[:1] in {"'", '"'}:
+        q = value[0]
+        i = 1
+        while i < len(value):
+            if value[i] == "\\" and i + 1 < len(value):
+                i += 2
+                continue
+            if value[i] == q:
+                return value[1:i].strip()
+            i += 1
+        return value
     if " #" in value:
         value = value.split(" #", 1)[0].rstrip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        value = value[1:-1]
     return value.strip()
 
 
@@ -100,6 +167,8 @@ def _read_env_values(path: Path) -> Dict[str, str]:
 
 def _project_relative_path(path: Path) -> str:
     """Return a project-relative display path without leaking an absolute path."""
+    if path == ENV_PATH:
+        return "~/.vibe-trading/.env"
     try:
         return path.resolve().relative_to(AGENT_DIR.parent.resolve()).as_posix()
     except ValueError:
@@ -123,19 +192,21 @@ def _format_env_value(value: str) -> str:
 
 def _write_env_values(path: Path, updates: Dict[str, str]) -> None:
     """Upsert active dotenv values while preserving comments and ordering."""
-    _ensure_agent_env_file()
+    _ensure_agent_env_file(path)
     lines = path.read_text(encoding="utf-8").splitlines()
-    seen: set[str] = set()
+    # Last active KEY= wins on read; update that line so upserts stick.
+    last_active: Dict[str, int] = {}
     for index, raw in enumerate(lines):
         stripped = raw.lstrip()
-        is_comment = stripped.startswith("#")
-        candidate = stripped[1:].lstrip() if is_comment else stripped
-        if "=" not in candidate:
+        if stripped.startswith("#") or "=" not in stripped:
             continue
-        key = candidate.split("=", 1)[0].strip()
-        if key in updates and key not in seen:
-            lines[index] = f"{key}={_format_env_value(updates[key])}"
-            seen.add(key)
+        key = stripped.split("=", 1)[0].strip()
+        if key in updates:
+            last_active[key] = index
+    seen: set[str] = set()
+    for key, index in last_active.items():
+        lines[index] = f"{key}={_format_env_value(updates[key])}"
+        seen.add(key)
     missing = [key for key in updates if key not in seen]
     if missing:
         if lines and lines[-1].strip():
@@ -143,7 +214,7 @@ def _write_env_values(path: Path, updates: Dict[str, str]) -> None:
         lines.append("# Updated from Web UI")
         for key in missing:
             lines.append(f"{key}={_format_env_value(updates[key])}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_secret(path, "\n".join(lines) + "\n")
 
 
 def _is_configured_secret(value: str, placeholders: set[str]) -> bool:

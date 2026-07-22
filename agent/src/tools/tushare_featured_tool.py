@@ -1,6 +1,5 @@
 """Tool: ``get_featured_data`` — Tushare featured data (41 kinds).
 
-Requires the corresponding Tushare privileges.
 This tool is strictly read-only and returns JSON-serialized results.
 """
 
@@ -61,7 +60,7 @@ def execute_featured_data_json(
     end_month: str = "",
     **kwargs: Any,
 ) -> str:
-    """查询 Tushare 特色数据（需要相应特权）。
+    """查询 Tushare 特色数据（41种数据类型）。
 
     支持四十一种数据类型：
 
@@ -262,7 +261,7 @@ def get_featured_data(
     end_month: str = "",
     **kwargs: Any,
 ) -> str:
-    """查询 Tushare 特色数据（需要相应特权）。"""
+    """查询 Tushare 特色数据（41种数据类型）。"""
     return execute_featured_data_json(
         kind=kind,
         ts_code=ts_code,

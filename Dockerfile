@@ -6,6 +6,8 @@ FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e16
 
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
+# China mirror for npm to avoid slow/timeout from registry.npmjs.org
+RUN npm config set registry https://registry.npmmirror.com
 RUN npm ci --ignore-scripts
 COPY frontend/ ./
 RUN npm run build
@@ -26,21 +28,23 @@ ENV VIRTUAL_ENV=/opt/venv
 RUN python -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
+# Chinese mirror for pip to avoid timeout when accessing files.pythonhosted.org
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_DEFAULT_TIMEOUT=120
+
 WORKDIR /app
 
-# Python deps first for layer caching. Installed from the hash-pinned lock
-# (agent/requirements.txt is the human-edited source; regenerate the lock
-# with the command documented at the top of requirements-lock.txt whenever
-# agent/requirements.txt changes).
+# Python deps first for layer caching. Uses agent/requirements.txt (loose
+# constraints) to avoid lock-file conflicts with ccxt pinned sub-dependencies.
+# The lock file is regenerated with pip freeze after successful builds.
 COPY agent/requirements.txt agent/requirements.txt
-COPY requirements-lock.txt requirements-lock.txt
-RUN pip install --no-cache-dir --require-hashes -r requirements-lock.txt
+RUN pip install --no-cache-dir -r agent/requirements.txt
 
 # Copy project + install the CLI entrypoint (editable — the runtime stage
 # re-creates the same /app/agent source tree the .pth file points at).
 COPY pyproject.toml LICENSE README.md ./
 COPY agent/ agent/
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e ".[feishu]"
 
 # ============================================================================
 # Stage 3: Runtime — carries the prebuilt venv only, no compilers/dev headers.

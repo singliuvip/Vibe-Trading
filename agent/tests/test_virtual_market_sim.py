@@ -101,11 +101,33 @@ def test_infer_currency_unknown() -> None:
 
 
 def test_quote_a_share_fallback(monkeypatch) -> None:
-    """A 股 fallback quote（loader 不可用时走 deterministic drift）."""
-    # Stub out _resolve_loader to simulate no loader installed.
+    """A 股 fallback quote（loader 不可用时走 deterministic drift，使用 base_prices）."""
+    # Stub out the fallback chain so all loaders are skipped.
     monkeypatch.setattr(
-        "src.trading.connectors.virtual.market_sim._resolve_loader",
-        lambda market: None,
+        "backtest.loaders.registry.FALLBACK_CHAINS",
+        {"a_share": []},
+    )
+    q = market_quote(
+        "000001.SZ",
+        universe=("000001.SZ",),
+        price_source="auto",
+        market="a_share",
+        allow_dynamic_symbols=False,
+        base_prices={"000001.SZ": 15.0},
+    )
+    assert q.symbol == "000001.SZ"
+    assert q.last > 0
+    assert q.bid > 0
+    assert q.ask > 0
+    assert q.source == "base_prices"
+
+
+def test_quote_a_share_no_base_prices(monkeypatch) -> None:
+    """A 股动态标的无 base_prices 时返回 price_unavailable（不静默使用 100.0）."""
+    # Stub out the fallback chain so all loaders are skipped.
+    monkeypatch.setattr(
+        "backtest.loaders.registry.FALLBACK_CHAINS",
+        {"a_share": []},
     )
     q = market_quote(
         "000001.SZ",
@@ -115,10 +137,10 @@ def test_quote_a_share_fallback(monkeypatch) -> None:
         allow_dynamic_symbols=False,
     )
     assert q.symbol == "000001.SZ"
-    assert q.last > 0
-    assert q.bid > 0
-    assert q.ask > 0
-    assert q.source == "fallback"
+    assert q.source == "price_unavailable"
+    assert q.last == 0.0
+    assert q.bid == 0.0
+    assert q.ask == 0.0
 
 
 def test_quote_a_share_out_of_universe() -> None:
@@ -133,10 +155,11 @@ def test_quote_a_share_out_of_universe() -> None:
 
 
 def test_quote_a_share_dynamic_symbols(monkeypatch) -> None:
-    """allow_dynamic_symbols=True 时通过（market 匹配）."""
+    """allow_dynamic_symbols=True 时通过（market 匹配，使用 base_prices）."""
+    # Stub out the fallback chain so all loaders are skipped.
     monkeypatch.setattr(
-        "src.trading.connectors.virtual.market_sim._resolve_loader",
-        lambda market: None,
+        "backtest.loaders.registry.FALLBACK_CHAINS",
+        {"a_share": []},
     )
     q = market_quote(
         "000001.SZ",
@@ -144,9 +167,10 @@ def test_quote_a_share_dynamic_symbols(monkeypatch) -> None:
         price_source="fallback",
         market="a_share",
         allow_dynamic_symbols=True,
+        base_prices={"000001.SZ": 15.0},
     )
     assert q.symbol == "000001.SZ"
-    assert q.source == "fallback"
+    assert q.source == "base_prices"
 
 
 def test_quote_us_equity_unchanged(monkeypatch) -> None:
@@ -196,10 +220,36 @@ def test_symbol_in_universe_dynamic() -> None:
 
 
 def test_historical_bars_a_share_fallback(monkeypatch) -> None:
-    """A 股 fallback bars（loader 不可用时走 synthetic bars）."""
+    """A 股 fallback bars（loader 不可用时走 synthetic bars，使用 base_prices）."""
+    # Stub out the fallback chain so all loaders are skipped.
     monkeypatch.setattr(
-        "src.trading.connectors.virtual.market_sim._resolve_loader",
-        lambda market: None,
+        "backtest.loaders.registry.FALLBACK_CHAINS",
+        {"a_share": []},
+    )
+    result = historical_bars(
+        "000001.SZ",
+        period="1d",
+        limit=5,
+        universe=("000001.SZ",),
+        price_source="auto",
+        market="a_share",
+        allow_dynamic_symbols=False,
+        base_prices={"000001.SZ": 15.0},
+    )
+    assert result["status"] == "ok"
+    assert result["symbol"] == "000001.SZ"
+    assert result["source"] == "base_prices"
+    assert len(result["bars"]) == 5
+    assert "open" in result["bars"][0]
+    assert "close" in result["bars"][0]
+
+
+def test_historical_bars_a_share_no_base_prices(monkeypatch) -> None:
+    """A 股无 base_prices 时 historical_bars 返回 error."""
+    # Stub out the fallback chain so all loaders are skipped.
+    monkeypatch.setattr(
+        "backtest.loaders.registry.FALLBACK_CHAINS",
+        {"a_share": []},
     )
     result = historical_bars(
         "000001.SZ",
@@ -210,9 +260,6 @@ def test_historical_bars_a_share_fallback(monkeypatch) -> None:
         market="a_share",
         allow_dynamic_symbols=False,
     )
-    assert result["status"] == "ok"
-    assert result["symbol"] == "000001.SZ"
-    assert result["source"] == "fallback"
-    assert len(result["bars"]) == 5
-    assert "open" in result["bars"][0]
-    assert "close" in result["bars"][0]
+    assert result["status"] == "error"
+    assert result["source"] == "price_unavailable"
+    assert len(result["bars"]) == 0

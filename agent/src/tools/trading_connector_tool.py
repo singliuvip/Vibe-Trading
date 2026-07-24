@@ -54,7 +54,7 @@ def _num_or_none(value: Any) -> float | None:
 TRADING_COMMON_PARAMETERS = {
     "connection": {
         "type": "string",
-        "description": "Trading connector profile id, e.g. ibkr-paper-local, robinhood-live-mcp, or virtual-paper-trade. Defaults to the selected profile. When the user wants paper/simulated trading with zero setup, recommend virtual-paper-trade. Profiles with 'requires_mandate' (including virtual-paper-trade) are gated by mandate + kill switch.",
+        "description": "Trading connector profile id. Zero-setup paper trading profiles: virtual-paper-trade (US stocks, USD, 8 blue-chips, short allowed) and virtual-paper-trade-cn (A-shares, CNY, dynamic symbols, T+1, 100-share lots, price limits, no short). Other examples: ibkr-paper-local, robinhood-live-mcp. Defaults to the selected profile. Profiles with 'requires_mandate' are gated by mandate + kill switch.",
     },
     "host": {
         "type": "string",
@@ -90,7 +90,7 @@ class TradingConnectionsTool(BaseTool):
     name = "trading_connections"
     description = (
         "List selectable trading connector profiles. Connectors come first; paper/live is a profile attribute. "
-        "Includes virtual-paper-trade for zero-setup local simulated trading."
+        "Includes virtual-paper-trade (US stocks) and virtual-paper-trade-cn (A-shares) for zero-setup local simulated trading."
     )
     parameters = {"type": "object", "properties": {}, "required": []}
     repeatable = True
@@ -121,7 +121,7 @@ class TradingSelectConnectionTool(BaseTool):
         "properties": {
             "connection": {
                 "type": "string",
-                "description": "Profile id to select, e.g. ibkr-paper-local.",
+                "description": "Profile id to select, e.g. virtual-paper-trade (US), virtual-paper-trade-cn (A-shares), or ibkr-paper-local.",
             }
         },
         "required": ["connection"],

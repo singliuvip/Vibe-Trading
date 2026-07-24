@@ -197,11 +197,11 @@ def _resolve_loader(market: str):
 
 
 def _try_loader_quote(symbol: str, market: str) -> Quote | None:
-    """Try to get a quote via the backtest loader registry.
+    """Try to get a quote via the backtest loader registry with runtime fallback.
 
-    Only attempts when *market* is ``"a_share"``. Calls the first available
-    loader's ``fetch()`` method for a recent 5-day window and extracts the
-    close price from the last bar.
+    Only attempts when *market* is ``"a_share"``. Walks the A-share fallback
+    chain and tries each loader in order. If a loader's ``fetch()`` fails at
+    runtime (e.g. Tushare 429), the next loader in the chain is tried.
 
     Args:
         symbol: The normalized symbol (e.g. ``"000001.SZ"``).
@@ -212,28 +212,56 @@ def _try_loader_quote(symbol: str, market: str) -> Quote | None:
     """
     if market != "a_share":
         return None
-    loader = _resolve_loader(market)
-    if loader is None:
-        return None
+
     try:
-        from datetime import date, timedelta
-        end_date = date.today().isoformat()
-        start_date = (date.today() - timedelta(days=5)).isoformat()
-        result = loader.fetch(
-            [symbol],
-            start_date=start_date,
-            end_date=end_date,
-            interval="1D",
+        from backtest.loaders.registry import (
+            _ensure_registered,
+            FALLBACK_CHAINS,
+            LOADER_REGISTRY,
         )
-        if result and symbol in result:
-            df = result[symbol]
-            if not df.empty:
-                close = float(df["close"].iloc[-1])
-                if close > 0:
-                    src_name = getattr(loader, "name", "unknown")
-                    return _make_quote(symbol, close, f"loader:{src_name}")
     except Exception:
-        logger.debug("loader quote failed for %s", symbol, exc_info=True)
+        logger.debug("cannot import loader registry for quote", exc_info=True)
+        return None
+
+    _ensure_registered()
+    chain = FALLBACK_CHAINS.get(market, [])
+    if not chain:
+        return None
+
+    from datetime import date, timedelta
+    end_date = date.today().isoformat()
+    start_date = (date.today() - timedelta(days=5)).isoformat()
+
+    for name in chain:
+        if name not in LOADER_REGISTRY:
+            continue
+        try:
+            loader = LOADER_REGISTRY[name]()
+        except Exception:
+            logger.debug("loader %s failed to construct", name, exc_info=True)
+            continue
+        if not loader.is_available():
+            continue
+        try:
+            result = loader.fetch(
+                [symbol],
+                start_date=start_date,
+                end_date=end_date,
+                interval="1D",
+            )
+            if result and symbol in result:
+                df = result[symbol]
+                if not df.empty:
+                    close = float(df["close"].iloc[-1])
+                    if close > 0:
+                        src_name = getattr(loader, "name", name)
+                        return _make_quote(symbol, close, f"loader:{src_name}")
+        except Exception:
+            logger.debug(
+                "loader %s quote failed for %s", name, symbol, exc_info=True,
+            )
+            continue
+
     return None
 
 
@@ -243,11 +271,11 @@ def _try_loader_bars(
     period: str = "1d",
     limit: int = 90,
 ) -> list[dict[str, Any]] | None:
-    """Try to get historical bars via the backtest loader registry.
+    """Try to get historical bars via the backtest loader registry with runtime fallback.
 
-    Only attempts when *market* is ``"a_share"``. Calls the first available
-    loader's ``fetch()`` method with a window sized to cover *limit* bars
-    and returns OHLCV dicts.
+    Only attempts when *market* is ``"a_share"``. Walks the A-share fallback
+    chain and tries each loader in order. If a loader's ``fetch()`` fails at
+    runtime (e.g. Tushare 429), the next loader in the chain is tried.
 
     Args:
         symbol: The normalized symbol.
@@ -260,58 +288,84 @@ def _try_loader_bars(
     """
     if market != "a_share":
         return None
-    loader = _resolve_loader(market)
-    if loader is None:
-        return None
+
     try:
-        from datetime import date, timedelta
-        # Estimate how many calendar days we need for *limit* trading bars.
-        # A generous multiplier handles weekends / holidays.
-        interval_norm = str(period).strip().lower()
-        if interval_norm in ("1m", "5m", "15m", "30m", "1h"):
-            # Intraday: fetch last 5 trading days.
-            day_window = 7
-        else:
-            day_window = max(limit * 2, 90)
-        end_date = date.today().isoformat()
-        start_date = (date.today() - timedelta(days=day_window)).isoformat()
-        # Map our period to the loader's interval convention.
-        # Warn when the requested interval does not exactly match a loader
-        # interval. E.g. "4h" is mapped to "60m" (1-hour) bars.
-        if interval_norm == "4h":
-            logger.info(
-                "A-share loader does not support 4h interval; falling back to 1h bars for %s",
-                symbol,
-            )
-        _period_map = {
-            "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-            "1h": "60m", "4h": "60m", "1d": "1D", "1w": "1W", "1M": "1M",
-        }
-        loader_interval = _period_map.get(interval_norm, "1D")
-        result = loader.fetch(
-            [symbol],
-            start_date=start_date,
-            end_date=end_date,
-            interval=loader_interval,
+        from backtest.loaders.registry import (
+            _ensure_registered,
+            FALLBACK_CHAINS,
+            LOADER_REGISTRY,
         )
-        if result and symbol in result:
-            df = result[symbol]
-            if not df.empty:
-                src_name = getattr(loader, "name", "unknown")
-                bars: list[dict[str, Any]] = []
-                for idx, row in df.tail(limit).iterrows():
-                    bars.append({
-                        "timestamp": str(idx),
-                        "open": round(float(row.get("open", 0)), 4),
-                        "high": round(float(row.get("high", 0)), 4),
-                        "low": round(float(row.get("low", 0)), 4),
-                        "close": round(float(row.get("close", 0)), 4),
-                        "volume": int(float(row.get("volume", 0))),
-                        "source": f"loader:{src_name}",
-                    })
-                return bars
     except Exception:
-        logger.debug("loader bars failed for %s", symbol, exc_info=True)
+        logger.debug("cannot import loader registry for bars", exc_info=True)
+        return None
+
+    _ensure_registered()
+    chain = FALLBACK_CHAINS.get(market, [])
+    if not chain:
+        return None
+
+    from datetime import date, timedelta
+    interval_norm = str(period).strip().lower()
+    if interval_norm in ("1m", "5m", "15m", "30m", "1h"):
+        # Intraday: fetch last 5 trading days.
+        day_window = 7
+    else:
+        day_window = max(limit * 2, 90)
+    end_date = date.today().isoformat()
+    start_date = (date.today() - timedelta(days=day_window)).isoformat()
+
+    # Warn when the requested interval does not exactly match a loader
+    # interval. E.g. "4h" is mapped to "60m" (1-hour) bars.
+    if interval_norm == "4h":
+        logger.info(
+            "A-share loader does not support 4h interval; falling back to 1h bars for %s",
+            symbol,
+        )
+    _period_map = {
+        "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+        "1h": "60m", "4h": "60m", "1d": "1D", "1w": "1W", "1M": "1M",
+    }
+    loader_interval = _period_map.get(interval_norm, "1D")
+
+    for name in chain:
+        if name not in LOADER_REGISTRY:
+            continue
+        try:
+            loader = LOADER_REGISTRY[name]()
+        except Exception:
+            logger.debug("loader %s failed to construct", name, exc_info=True)
+            continue
+        if not loader.is_available():
+            continue
+        try:
+            result = loader.fetch(
+                [symbol],
+                start_date=start_date,
+                end_date=end_date,
+                interval=loader_interval,
+            )
+            if result and symbol in result:
+                df = result[symbol]
+                if not df.empty:
+                    src_name = getattr(loader, "name", name)
+                    bars: list[dict[str, Any]] = []
+                    for idx, row in df.tail(limit).iterrows():
+                        bars.append({
+                            "timestamp": str(idx),
+                            "open": round(float(row.get("open", 0)), 4),
+                            "high": round(float(row.get("high", 0)), 4),
+                            "low": round(float(row.get("low", 0)), 4),
+                            "close": round(float(row.get("close", 0)), 4),
+                            "volume": int(float(row.get("volume", 0))),
+                            "source": f"loader:{src_name}",
+                        })
+                    return bars
+        except Exception:
+            logger.debug(
+                "loader %s bars failed for %s", name, symbol, exc_info=True,
+            )
+            continue
+
     return None
 
 
@@ -379,23 +433,59 @@ def _try_yfinance_bars(
 # ---------------------------------------------------------------------------
 
 
-def _fallback_quote(symbol: str, base_price: float | None = None) -> Quote:
+def _unavailable_quote(symbol: str) -> Quote:
+    """Return a Quote indicating the price is unavailable.
+
+    Used when no external source, cache, ``FALLBACK_PRICES``, or profile
+    ``base_prices`` can provide a price for the symbol.
+    """
+    return Quote(
+        symbol=symbol,
+        bid=0.0,
+        ask=0.0,
+        last=0.0,
+        time=_now_iso(),
+        source="price_unavailable",
+    )
+
+
+def _fallback_quote(
+    symbol: str,
+    base_price: float | None = None,
+    base_prices: dict[str, float] | None = None,
+) -> Quote:
     """Generate a deterministic-drift fallback quote.
+
+    Resolution order:
+    1. Explicit *base_price* (from cache).
+    2. ``FALLBACK_PRICES`` (hardcoded internal table).
+    3. Profile *base_prices* (user-configured).
+    4. Return ``_unavailable_quote()`` — no silent 100.0 default.
 
     Args:
         symbol: The symbol code.
-        base_price: Explicit base price; falls back to ``FALLBACK_PRICES``.
+        base_price: Explicit base price (from cache); falls back to
+            ``FALLBACK_PRICES``, then profile *base_prices*.
+        base_prices: Optional profile-level base price map.
 
     Returns:
-        A ``Quote`` with ``source="fallback"``.
+        A ``Quote`` with ``source="fallback"``, ``source="base_prices"``,
+        or ``source="price_unavailable"``.
     """
-    base = base_price if base_price is not None else FALLBACK_PRICES.get(symbol)
+    base = base_price
+    source = "fallback"
     if base is None:
-        base = 100.0  # arbitrary fallback for unknown symbols
+        base = FALLBACK_PRICES.get(symbol)
+    if base is None and base_prices:
+        base = base_prices.get(symbol)
+        if base is not None:
+            source = "base_prices"
+    if base is None:
+        return _unavailable_quote(symbol)
     bucket = _current_time_bucket()
     noise = _deterministic_noise(symbol, bucket)
     last = base * (1.0 + noise)
-    return _make_quote(symbol, last, "fallback")
+    return _make_quote(symbol, last, source)
 
 
 def _synthetic_bars(
@@ -464,6 +554,7 @@ def quote(
     cached_prices: dict[str, float] | None = None,
     market: str = "us_equity",
     allow_dynamic_symbols: bool = False,
+    base_prices: dict[str, float] | None = None,
 ) -> Quote:
     """Fetch a simulated quote for *symbol*.
 
@@ -485,6 +576,8 @@ def quote(
         market: The target market (``"us_equity"``, ``"a_share"``, ``"hk_equity"``).
         allow_dynamic_symbols: If ``True``, any symbol whose inferred market
             matches *market* passes the universe check.
+        base_prices: Optional profile-level base price map, used as the
+            third tier before returning ``price_unavailable``.
 
     Returns:
         A :class:`Quote` instance.
@@ -525,10 +618,10 @@ def quote(
     # Tier 2: cache (fresh enough)
     if cached_prices is not None and sym in cached_prices:
         base = cached_prices[sym]
-        return _fallback_quote(sym, base_price=base)
+        return _fallback_quote(sym, base_price=base, base_prices=base_prices)
 
-    # Tier 3: fallback deterministic drift
-    return _fallback_quote(sym)
+    # Tier 3: fallback deterministic drift (FALLBACK_PRICES → base_prices → unavailable)
+    return _fallback_quote(sym, base_prices=base_prices)
 
 
 def historical_bars(
@@ -541,6 +634,7 @@ def historical_bars(
     cached_prices: dict[str, float] | None = None,
     market: str = "us_equity",
     allow_dynamic_symbols: bool = False,
+    base_prices: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Fetch simulated historical OHLCV bars.
 
@@ -557,6 +651,8 @@ def historical_bars(
         market: The target market (``"us_equity"``, ``"a_share"``, ``"hk_equity"``).
         allow_dynamic_symbols: If ``True``, any symbol whose inferred market
             matches *market* passes the universe check.
+        base_prices: Optional profile-level base price map, forwarded to
+            ``quote()`` for the synthetic bar anchor.
 
     Returns:
         A dict with ``status``, ``symbol``, ``period``, ``bars``, ``source``.
@@ -612,12 +708,29 @@ def historical_bars(
                 }
 
     # Tier 2: synthetic bars from current fallback price
-    q = quote(sym, universe=universe, price_source="fallback", cached_prices=cached_prices, market=market, allow_dynamic_symbols=allow_dynamic_symbols)
+    q = quote(
+        sym,
+        universe=universe,
+        price_source="fallback",
+        cached_prices=cached_prices,
+        market=market,
+        allow_dynamic_symbols=allow_dynamic_symbols,
+        base_prices=base_prices,
+    )
+    if q.source == "price_unavailable":
+        return {
+            "status": "error",
+            "symbol": sym,
+            "period": period,
+            "source": "price_unavailable",
+            "error": f"no price available for {sym!r}",
+            "bars": [],
+        }
     bars = _synthetic_bars(sym, q.last, period, limit)
     return {
         "status": "ok",
         "symbol": sym,
         "period": period,
-        "source": "fallback",
+        "source": q.source,
         "bars": bars,
     }

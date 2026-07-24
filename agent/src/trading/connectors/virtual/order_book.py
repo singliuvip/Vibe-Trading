@@ -715,6 +715,7 @@ def submit_order(
     price_source: str,
     market: str = "us_equity",
     allow_dynamic_symbols: bool = False,
+    base_prices: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Submit an order and attempt immediate matching (thread-safe).
 
@@ -737,6 +738,7 @@ def submit_order(
         max_leverage: Maximum gross leverage.
         universe: Allowed symbols.
         price_source: Price source selection.
+        base_prices: Optional profile-level base price map.
 
     Returns:
         A result dict with ``status``, ``order_id``, ``order_status``,
@@ -753,9 +755,13 @@ def submit_order(
                 cached_prices=state.prices,
                 market=market,
                 allow_dynamic_symbols=allow_dynamic_symbols,
+                base_prices=base_prices,
             )
         except ValueError as exc:
             return {"status": "error", "error": str(exc)}
+
+        if q.source == "price_unavailable":
+            return {"status": "error", "error": f"no price available for {sym!r} — all data sources failed"}
 
         order_id = _new_id("ord_")
         now = _now_iso()
@@ -886,6 +892,7 @@ def match_open_orders(
     price_source: str,
     market: str = "us_equity",
     allow_dynamic_symbols: bool = False,
+    base_prices: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Match all open limit orders against current quotes (thread-safe).
 
@@ -900,6 +907,7 @@ def match_open_orders(
         max_leverage: Maximum gross leverage.
         universe: Allowed symbols.
         price_source: Price source selection.
+        base_prices: Optional profile-level base price map.
 
     Returns:
         A list of execution result dicts for newly-filled orders.
@@ -923,10 +931,13 @@ def match_open_orders(
                     cached_prices=state.prices,
                     market=market,
                     allow_dynamic_symbols=allow_dynamic_symbols,
+                    base_prices=base_prices,
                 )
                 quotes[sym] = q
                 state.prices[sym] = q.last
             except ValueError:
+                continue
+            if q.source == "price_unavailable":
                 continue
 
         for order in open_orders:
@@ -973,6 +984,7 @@ def mark_to_market(
     price_source: str,
     market: str = "us_equity",
     allow_dynamic_symbols: bool = False,
+    base_prices: dict[str, float] | None = None,
 ) -> None:
     """Update all positions' market value and unrealised P&L (thread-safe).
 
@@ -983,6 +995,7 @@ def mark_to_market(
         market: The target market (``"us_equity"``, ``"a_share"``, ``"hk_equity"``).
         allow_dynamic_symbols: If ``True``, symbols matching *market* pass
             the universe check.
+        base_prices: Optional profile-level base price map.
     """
     with _lock:
         for pos in list(state.positions.values()):
@@ -994,9 +1007,12 @@ def mark_to_market(
                     cached_prices=state.prices,
                     market=market,
                     allow_dynamic_symbols=allow_dynamic_symbols,
+                    base_prices=base_prices,
                 )
                 state.prices[pos.symbol] = q.last
                 pos.market_value = abs(pos.quantity) * q.last
                 pos.unrealized_pnl = (q.last - pos.avg_price) * pos.quantity
             except ValueError:
+                continue
+            if q.source == "price_unavailable":
                 continue

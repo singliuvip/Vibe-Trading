@@ -247,7 +247,7 @@ def get_account_snapshot(config: VirtualConfig | None = None) -> dict[str, Any]:
     """
     cfg = config or build_config()
     state = load_or_initialize(cfg.account_id, cfg.initial_cash, cfg.currency, cfg.symbols)
-    mark_to_market(state, universe=cfg.symbols, price_source=cfg.price_source, market=cfg.market, allow_dynamic_symbols=cfg.allow_dynamic_symbols)
+    mark_to_market(state, universe=cfg.symbols, price_source=cfg.price_source, market=cfg.market, allow_dynamic_symbols=cfg.allow_dynamic_symbols, base_prices=cfg.base_prices)
     try:
         match_open_orders(
             state,
@@ -259,6 +259,7 @@ def get_account_snapshot(config: VirtualConfig | None = None) -> dict[str, Any]:
             price_source=cfg.price_source,
             market=cfg.market,
             allow_dynamic_symbols=cfg.allow_dynamic_symbols,
+            base_prices=cfg.base_prices,
         )
     except Exception:
         logger.debug("match_open_orders failed during account snapshot", exc_info=True)
@@ -307,7 +308,7 @@ def get_positions(config: VirtualConfig | None = None) -> dict[str, Any]:
     """
     cfg = config or build_config()
     state = load_or_initialize(cfg.account_id, cfg.initial_cash, cfg.currency, cfg.symbols)
-    mark_to_market(state, universe=cfg.symbols, price_source=cfg.price_source, market=cfg.market, allow_dynamic_symbols=cfg.allow_dynamic_symbols)
+    mark_to_market(state, universe=cfg.symbols, price_source=cfg.price_source, market=cfg.market, allow_dynamic_symbols=cfg.allow_dynamic_symbols, base_prices=cfg.base_prices)
     try:
         match_open_orders(
             state,
@@ -319,6 +320,7 @@ def get_positions(config: VirtualConfig | None = None) -> dict[str, Any]:
             price_source=cfg.price_source,
             market=cfg.market,
             allow_dynamic_symbols=cfg.allow_dynamic_symbols,
+            base_prices=cfg.base_prices,
         )
     except Exception:
         logger.debug("match_open_orders failed during positions fetch", exc_info=True)
@@ -368,6 +370,7 @@ def get_open_orders(
             price_source=cfg.price_source,
             market=cfg.market,
             allow_dynamic_symbols=cfg.allow_dynamic_symbols,
+            base_prices=cfg.base_prices,
         )
     except Exception:
         logger.debug("match_open_orders failed during open orders fetch", exc_info=True)
@@ -441,9 +444,18 @@ def get_quote(
             cached_prices=state.prices,
             market=cfg.market,
             allow_dynamic_symbols=cfg.allow_dynamic_symbols,
+            base_prices=cfg.base_prices,
         )
     except ValueError as exc:
         return {"status": "error", "error": str(exc)}
+
+    if q.source == "price_unavailable":
+        return {
+            "status": "error",
+            "error": f"no price available for {q.symbol!r} — all data sources failed",
+            "symbol": q.symbol,
+            "quote": {"bid": 0.0, "ask": 0.0, "last": 0.0, "source": "price_unavailable"},
+        }
 
     return {
         "status": "ok",
@@ -491,6 +503,7 @@ def get_historical_bars(
         cached_prices=state.prices,
         market=cfg.market,
         allow_dynamic_symbols=cfg.allow_dynamic_symbols,
+        base_prices=cfg.base_prices,
     )
 
 
@@ -576,6 +589,7 @@ def place_order(
         price_source=cfg.price_source,
         market=cfg.market,
         allow_dynamic_symbols=cfg.allow_dynamic_symbols,
+        base_prices=cfg.base_prices,
     )
 
 

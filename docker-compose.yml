@@ -15,6 +15,11 @@ services:
       - agent/.env
     environment:
       - VIBE_TRADING_TRUST_DOCKER_LOOPBACK=1
+      # Allow OpenClaw / other Docker containers to reach the MCP SSE endpoint
+      # via host.docker.internal. The default loopback-only allow-list rejects
+      # the "host.docker.internal" Host header, so MCP tools are invisible to
+      # containers on the same Docker network.
+      - VIBE_TRADING_MCP_ALLOWED_HOSTS=127.0.0.1,::1,localhost,host.docker.internal
       # Ollama runs on the host; from inside the container "localhost" is the
       # container itself, so default to reaching the host via host.docker.internal.
       # Override by exporting OLLAMA_BASE_URL (or setting it in a top-level .env)
@@ -93,7 +98,7 @@ services:
       - ./frontend:/app
     environment:
       - VITE_API_URL=http://vibe-trading:8899
-    command: sh -c "npm install && npm run dev -- --host --port 5899"
+    command: sh -c "npm config set registry https://registry.npmmirror.com && npm install && npm run dev -- --host --port 5899"
     profiles:
       - frontend
     depends_on:

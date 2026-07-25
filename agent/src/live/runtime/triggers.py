@@ -40,15 +40,22 @@ class _MarketSpec:
 
     Attributes:
         tz: IANA timezone the session times are expressed in.
-        open_time: Local session open (inclusive).
+        open_time: Local session open (inclusive). Ignored when ``sessions``
+            is non-empty.
         close_time: Local session close (exclusive — a tick exactly at the
             close bell counts as *closed*, matching exchange convention).
+            Ignored when ``sessions`` is non-empty.
         weekdays: Permitted weekdays as ``date.weekday()`` values (Mon==0).
             Empty == every day (24/7 markets such as crypto).
         always_open: Short-circuit for 24/7 markets; when ``True`` the time /
             weekday / holiday checks are skipped entirely.
         holidays: Full-day market closures (no half-days modelled). This is a
             deliberately small, static set — see module docstring limitation.
+        sessions: Multi-session support (e.g. A-shares with a lunch break).
+            A tuple of ``(open, close)`` time pairs; open is inclusive, close
+            is exclusive. When non-empty, ``open_time`` / ``close_time`` are
+            ignored and these sessions are used instead. Defaults to an empty
+            tuple so existing single-session markets are unaffected.
     """
 
     tz: str
@@ -57,6 +64,7 @@ class _MarketSpec:
     weekdays: frozenset[int] = frozenset()
     always_open: bool = False
     holidays: frozenset[date] = field(default_factory=frozenset)
+    sessions: tuple[tuple[time, time], ...] = field(default_factory=tuple)
 
 
 # US market holidays. LIMITATION: this is a hand-maintained static set (no
@@ -92,6 +100,53 @@ _US_EQUITY_HOLIDAYS: frozenset[date] = frozenset(
 
 _WEEKDAYS_MON_FRI = frozenset({0, 1, 2, 3, 4})
 
+# A-share (China) market holidays. LIMITATION: this is a hand-maintained static
+# set (no half-day early closes, no rolling computation). It covers 2026-2027;
+# extend as needed. A production deploy that needs decades of coverage should
+# swap in a dedicated Chinese market calendar behind this same spec.
+_CN_EQUITY_HOLIDAYS: frozenset[date] = frozenset(
+    {
+        # 2026
+        date(2026, 1, 1),  # 元旦
+        date(2026, 1, 2),  # 元旦
+        date(2026, 2, 16),  # 春节
+        date(2026, 2, 17),  # 春节
+        date(2026, 2, 18),  # 春节
+        date(2026, 2, 19),  # 春节
+        date(2026, 2, 20),  # 春节
+        date(2026, 4, 6),  # 清明
+        date(2026, 5, 1),  # 劳动节
+        date(2026, 5, 4),  # 劳动节
+        date(2026, 5, 5),  # 劳动节
+        date(2026, 6, 19),  # 端午
+        date(2026, 9, 25),  # 中秋
+        date(2026, 10, 1),  # 国庆
+        date(2026, 10, 2),  # 国庆
+        date(2026, 10, 5),  # 国庆
+        date(2026, 10, 6),  # 国庆
+        date(2026, 10, 7),  # 国庆
+        date(2026, 10, 8),  # 国庆
+        # 2027
+        date(2027, 1, 1),  # 元旦
+        date(2027, 2, 5),  # 春节
+        date(2027, 2, 8),  # 春节
+        date(2027, 2, 9),  # 春节
+        date(2027, 2, 10),  # 春节
+        date(2027, 2, 11),  # 春节
+        date(2027, 4, 5),  # 清明
+        date(2027, 5, 3),  # 劳动节
+        date(2027, 5, 4),  # 劳动节
+        date(2027, 5, 5),  # 劳动节
+        date(2027, 6, 9),  # 端午
+        date(2027, 9, 15),  # 中秋
+        date(2027, 10, 1),  # 国庆
+        date(2027, 10, 4),  # 国庆
+        date(2027, 10, 5),  # 国庆
+        date(2027, 10, 6),  # 国庆
+        date(2027, 10, 7),  # 国庆
+    }
+)
+
 # Market registry. Keys match the AssetClass-style identifiers the runner uses
 # (e.g. "us_equity", "crypto"). Add markets here, never inline in functions.
 MARKET_SPECS: Mapping[str, _MarketSpec] = {
@@ -108,6 +163,17 @@ MARKET_SPECS: Mapping[str, _MarketSpec] = {
         close_time=time(0, 0),
         always_open=True,
     ),
+    "cn_equity": _MarketSpec(
+        tz="Asia/Shanghai",
+        open_time=time(9, 30),  # primary session (compat with single-session logic)
+        close_time=time(15, 0),
+        weekdays=_WEEKDAYS_MON_FRI,
+        holidays=_CN_EQUITY_HOLIDAYS,
+        sessions=(
+            (time(9, 30), time(11, 30)),  # 上午盘
+            (time(13, 0), time(15, 0)),  # 下午盘
+        ),
+    ),
 }
 
 
@@ -117,11 +183,12 @@ MARKET_SPECS: Mapping[str, _MarketSpec] = {
 
 
 class TriggerKind(str, Enum):
-    """The three trigger families layered over the wall-clock scheduler."""
+    """The trigger families layered over the wall-clock scheduler."""
 
     INTERVAL = "interval"
     MARKET = "market"
     EVENT = "event"
+    CRON = "cron"
 
 
 @dataclass(frozen=True)
@@ -155,6 +222,7 @@ class Trigger:
     epoch_ms: int = 0
     market: str | None = None
     predicate: Callable[[Mapping[str, object]], bool] | None = None
+    cron_spec: str | None = None  # CRON only — 5-field cron expression (UTC)
 
     @classmethod
     def interval(cls, interval_ms: int, *, epoch_ms: int = 0) -> "Trigger":
@@ -203,6 +271,25 @@ class Trigger:
             A frozen EVENT :class:`Trigger`.
         """
         return cls(kind=TriggerKind.EVENT, predicate=predicate)
+
+    @classmethod
+    def cron(cls, cron_spec: str) -> "Trigger":
+        """Build a cron trigger from a 5-field cron expression (UTC).
+
+        Args:
+            cron_spec: 5-field cron string, e.g. ``"25 9 * * 1-5"`` for 9:25
+                UTC on weekdays.
+
+        Returns:
+            A frozen CRON :class:`Trigger`.
+
+        Raises:
+            ValueError: If ``cron_spec`` is not a valid 5-field cron expression.
+        """
+        from src.scheduled_research.models import validate_schedule
+
+        validate_schedule(cron_spec)
+        return cls(kind=TriggerKind.CRON, cron_spec=cron_spec)
 
 
 # --------------------------------------------------------------------------- #
@@ -253,6 +340,9 @@ def market_is_open_at(market: str, now_ms: int) -> bool:
         return False
     if local_dt.date() in spec.holidays:
         return False
+    # Multi-session support (e.g. A-shares with lunch break).
+    if spec.sessions:
+        return any(start <= local_dt.time() < end for start, end in spec.sessions)
     return spec.open_time <= local_dt.time() < spec.close_time
 
 
@@ -267,6 +357,8 @@ def due_now(trigger: Trigger, now_ms: int, *, event_state: Mapping[str, object] 
     * MARKET: due whenever the trigger's market is open at ``now_ms``.
     * EVENT: due when the trigger's predicate returns truthy against
       ``event_state`` (an empty mapping when the runner supplies none).
+    * CRON: due when ``now_ms`` falls on a minute that matches the 5-field
+      cron expression (1-minute resolution, UTC).
 
     Args:
         trigger: The trigger to evaluate.
@@ -295,6 +387,18 @@ def due_now(trigger: Trigger, now_ms: int, *, event_state: Mapping[str, object] 
         if trigger.predicate is None:
             raise ValueError("event trigger requires a predicate")
         return bool(trigger.predicate(event_state or {}))
+
+    if trigger.kind is TriggerKind.CRON:
+        if trigger.cron_spec is None:
+            raise ValueError("cron trigger requires a cron_spec")
+        from src.scheduled_research.executor import next_due
+
+        # A cron trigger fires when now_ms falls on a matching minute.
+        # Compute the next fire time from 1 minute ago; if it equals now_ms
+        # (within the same minute), the trigger is due.
+        prev_ms = now_ms - 60_000
+        next_fire = next_due(trigger.cron_spec, prev_ms)
+        return next_fire <= now_ms
 
     raise ValueError(f"unknown trigger kind: {trigger.kind!r}")
 

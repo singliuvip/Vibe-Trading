@@ -225,3 +225,103 @@ def test_now_ms_is_utc_epoch_ms() -> None:
     val = triggers._now_ms()
     after = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
     assert before <= val <= after + 1000
+
+
+# --------------------------------------------------------------------------- #
+# Market sessions — cn_equity (A-shares with lunch break)                     #
+# --------------------------------------------------------------------------- #
+
+# 2026-07-24 is a Friday (regular A-share trading day).
+_CN_FRI = (2026, 7, 24)
+# 2026-07-25 is a Saturday.
+_CN_SAT = (2026, 7, 25)
+# 2026-10-01 is National Day holiday.
+_CN_NATIONAL = (2026, 10, 1)
+
+
+@pytest.mark.parametrize(
+    ("now_ms", "expected"),
+    [
+        # Morning session open (inclusive).
+        (_ms(*_CN_FRI, 9, 30, "Asia/Shanghai"), True),
+        # Mid-morning.
+        (_ms(*_CN_FRI, 10, 30, "Asia/Shanghai"), True),
+        # Morning session close (exclusive).
+        (_ms(*_CN_FRI, 11, 30, "Asia/Shanghai"), False),
+        # Lunch break.
+        (_ms(*_CN_FRI, 12, 0, "Asia/Shanghai"), False),
+        # Afternoon session open (inclusive).
+        (_ms(*_CN_FRI, 13, 0, "Asia/Shanghai"), True),
+        # Mid-afternoon.
+        (_ms(*_CN_FRI, 14, 30, "Asia/Shanghai"), True),
+        # Afternoon session close (exclusive).
+        (_ms(*_CN_FRI, 15, 0, "Asia/Shanghai"), False),
+        # Pre-market.
+        (_ms(*_CN_FRI, 9, 0, "Asia/Shanghai"), False),
+        # After hours.
+        (_ms(*_CN_FRI, 16, 0, "Asia/Shanghai"), False),
+        # Weekend.
+        (_ms(*_CN_SAT, 10, 0, "Asia/Shanghai"), False),
+        # National Day holiday.
+        (_ms(*_CN_NATIONAL, 10, 0, "Asia/Shanghai"), False),
+    ],
+)
+def test_cn_equity_open_windows(now_ms: int, expected: bool) -> None:
+    assert market_is_open_at("cn_equity", now_ms) is expected
+
+
+def test_cn_equity_uses_shanghai_local_not_utc() -> None:
+    # 02:00 UTC on the Friday is 10:00 CST — inside morning session.
+    utc_0200 = _ms(*_CN_FRI, 2, 0, "UTC")
+    assert market_is_open_at("cn_equity", utc_0200) is True
+    # 08:00 UTC is 16:00 CST — after close.
+    utc_0800 = _ms(*_CN_FRI, 8, 0, "UTC")
+    assert market_is_open_at("cn_equity", utc_0800) is False
+
+
+def test_cn_equity_trigger_construction() -> None:
+    t = Trigger.market("cn_equity")
+    assert t.kind is TriggerKind.MARKET
+    assert t.market == "cn_equity"
+
+
+# --------------------------------------------------------------------------- #
+# Cron triggers                                                               #
+# --------------------------------------------------------------------------- #
+
+
+def test_cron_trigger_construction() -> None:
+    t = Trigger.cron("25 9 * * 1-5")
+    assert t.kind is TriggerKind.CRON
+    assert t.cron_spec == "25 9 * * 1-5"
+
+
+def test_cron_trigger_invalid_spec() -> None:
+    with pytest.raises(ValueError):
+        Trigger.cron("invalid")
+
+
+def test_cron_due_at_exact_minute() -> None:
+    # "30 9 * * *" = every day at 9:30 UTC
+    t = Trigger.cron("30 9 * * *")
+    # 2026-07-24 09:30 UTC
+    now = _ms(2026, 7, 24, 9, 30, "UTC")
+    assert due_now(t, now) is True
+
+
+def test_cron_not_due_wrong_minute() -> None:
+    t = Trigger.cron("30 9 * * *")
+    # 2026-07-24 09:31 UTC — one minute past
+    now = _ms(2026, 7, 24, 9, 31, "UTC")
+    assert due_now(t, now) is False
+
+
+def test_cron_weekday_filter() -> None:
+    # "0 9 * * 1-5" = weekdays only at 9:00 UTC
+    t = Trigger.cron("0 9 * * 1-5")
+    # 2026-07-24 is Friday — due
+    fri = _ms(2026, 7, 24, 9, 0, "UTC")
+    assert due_now(t, fri) is True
+    # 2026-07-25 is Saturday — not due
+    sat = _ms(2026, 7, 25, 9, 0, "UTC")
+    assert due_now(t, sat) is False

@@ -39,6 +39,16 @@ NowFn = Callable[[], int]
 FireCallback = Callable[["Job"], Awaitable[None]]
 
 
+def _is_cron_spec(spec: str) -> bool:
+    """Return whether *spec* looks like a 5-field cron expression.
+
+    A cron spec has exactly 5 whitespace-separated fields (minute, hour,
+    day-of-month, month, day-of-week). This is a lightweight structural check;
+    full validation is deferred to the cron parser at scheduling time.
+    """
+    return len(spec.split()) == 5
+
+
 def _now_ms() -> int:
     """Return the current wall-clock time in epoch milliseconds.
 
@@ -80,9 +90,11 @@ class Job:
 
         Returns:
             The interval for an ``"interval:<ms>"`` schedule, ``None`` for a
-            ``"once"`` schedule, and :data:`DEFAULT_INTERVAL_MS` for any other
-            (non-empty) recognized-but-bare spec so a misconfigured job still
-            watches on a sane cadence rather than silently never recurring.
+            ``"once"`` schedule or a 5-field cron expression (cron jobs are
+            rescheduled by :func:`advance_after_fire` via the cron parser),
+            and :data:`DEFAULT_INTERVAL_MS` for any other (non-empty)
+            recognized-but-bare spec so a misconfigured job still watches on
+            a sane cadence rather than silently never recurring.
         """
         spec = (self.schedule or "").strip().lower()
         if spec == "once":
@@ -94,6 +106,9 @@ class Job:
             except ValueError:
                 return DEFAULT_INTERVAL_MS
             return ms if ms > 0 else DEFAULT_INTERVAL_MS
+        # Cron schedule — not a fixed interval; advance_after_fire handles it.
+        if _is_cron_spec(spec):
+            return None
         return DEFAULT_INTERVAL_MS
 
 
@@ -160,6 +175,9 @@ def advance_after_fire(job: Job, now_ms: int) -> bool:
     suspended or the loop was busy — does not immediately re-fire a backlog of
     missed slots. One-shot jobs are not advanced.
 
+    Cron-scheduled jobs (5-field cron expression) are rescheduled to the next
+    matching time computed by the shared cron parser.
+
     Args:
         job: The job that just fired. Mutated in place when recurring.
         now_ms: The time the job fired, in epoch ms.
@@ -168,6 +186,15 @@ def advance_after_fire(job: Job, now_ms: int) -> bool:
         ``True`` if the job recurs and should stay in the set, ``False`` if it
         was one-shot and should be removed.
     """
+    spec = (job.schedule or "").strip().lower()
+    if spec == "once":
+        return False
+    # Cron schedule — compute next fire time via the shared cron parser.
+    if _is_cron_spec(spec):
+        from src.scheduled_research.executor import next_due
+
+        job.next_run_at = next_due(spec, now_ms)
+        return True
     interval = job.interval_ms()
     if interval is None:
         return False

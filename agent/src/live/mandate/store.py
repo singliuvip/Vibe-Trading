@@ -26,6 +26,7 @@ import logging
 
 from src.live.mandate.model import (
     AssetClass,
+    AutomationBounds,
     ConsentMeta,
     HardCaps,
     InstrumentType,
@@ -124,6 +125,7 @@ def _parse_mandate(raw: object) -> Mandate:
         account_ref=str(consent["account_ref"]),
         expires_at=str(consent["expires_at"]),
     )
+    automation_bounds = _parse_automation_bounds(raw.get("automation_bounds"))
     return Mandate(
         schema_version=int(raw["schema_version"]),
         hard_caps=hard_caps,
@@ -133,6 +135,10 @@ def _parse_mandate(raw: object) -> Mandate:
         # old mandate.json → False (cancel-only, the safe default), keeping the
         # read backward-compatible. Read on a halt trip by src.live.runtime.flatten.
         flatten_on_halt=bool(raw.get("flatten_on_halt", False)),
+        # Optional automation-only ceilings (Layer c). Absent on a v1
+        # mandate.json → None (backward-compatible); the shared gate never reads
+        # this, only the automation executor does.
+        automation_bounds=automation_bounds,
     )
 
 
@@ -146,6 +152,37 @@ def _require_dict(value: object, field: str) -> dict:
 def _opt_float(value: object) -> float | None:
     """Coerce an optional numeric field to ``float | None``."""
     return None if value is None else float(value)
+
+
+def _opt_int(value: object) -> int | None:
+    """Coerce an optional numeric field to ``int | None``."""
+    return None if value is None else int(value)
+
+
+def _parse_automation_bounds(raw: object) -> AutomationBounds | None:
+    """Parse the optional automation_bounds section (absent → None, backward-compat).
+
+    A v1 mandate.json lacks this key entirely → returns None, and the mandate
+    behaves exactly as before. When present, strict parsing applies; a malformed
+    section raises so the whole load fail-closes (returns None at load_mandate).
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("automation_bounds must be a JSON object")
+    allowed_order_types = raw.get("allowed_order_types")
+    return AutomationBounds(
+        max_daily_turnover_usd=_opt_float(raw.get("max_daily_turnover_usd")),
+        max_symbol_exposure_usd=_opt_float(raw.get("max_symbol_exposure_usd")),
+        max_positions=_opt_int(raw.get("max_positions")),
+        max_open_orders=_opt_int(raw.get("max_open_orders")),
+        max_daily_realized_loss_usd=_opt_float(raw.get("max_daily_realized_loss_usd")),
+        max_drawdown_pct=_opt_float(raw.get("max_drawdown_pct")),
+        allowed_order_types=tuple(str(v) for v in allowed_order_types) if allowed_order_types else (),
+        max_slippage_pct=_opt_float(raw.get("max_slippage_pct")),
+        require_stop_loss=bool(raw.get("require_stop_loss", False)),
+        allow_short=bool(raw.get("allow_short", False)),
+    )
 
 
 # ---------------------------------------------------------------------------

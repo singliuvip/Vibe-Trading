@@ -196,3 +196,42 @@ def test_scheduler_stop_is_idempotent_when_not_started() -> None:
         await sched.stop()
 
     asyncio.run(scenario())
+
+
+# ---- cron schedule support ------------------------------------------------
+
+
+def test_interval_ms_cron_spec_returns_none() -> None:
+    """A 5-field cron schedule is not a fixed interval."""
+    job = _job("a", 0, "25 9 * * 1-5")
+    assert job.interval_ms() is None
+
+
+def test_advance_after_fire_cron_reschedules() -> None:
+    """A cron job should be rescheduled to the next matching time."""
+    # "30 9 * * *" = every day at 9:30 UTC
+    # Fire at 2026-07-24 09:30 UTC
+    from datetime import datetime, timezone
+
+    fire_ms = int(datetime(2026, 7, 24, 9, 30, tzinfo=timezone.utc).timestamp() * 1000)
+    job = _job("a", fire_ms, "30 9 * * *")
+    keep = advance_after_fire(job, now_ms=fire_ms)
+    assert keep is True
+    # Next fire should be 2026-07-25 09:30 UTC (24h later)
+    expected_next = int(datetime(2026, 7, 25, 9, 30, tzinfo=timezone.utc).timestamp() * 1000)
+    assert job.next_run_at == expected_next
+
+
+def test_advance_after_fire_cron_weekday_skips_weekend() -> None:
+    """A weekday-only cron job fired on Friday should next fire Monday."""
+    # "0 9 * * 1-5" = weekdays at 9:00 UTC
+    # Fire at 2026-07-24 (Friday) 09:00 UTC
+    from datetime import datetime, timezone
+
+    fri_ms = int(datetime(2026, 7, 24, 9, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    job = _job("a", fri_ms, "0 9 * * 1-5")
+    keep = advance_after_fire(job, now_ms=fri_ms)
+    assert keep is True
+    # Next fire should be 2026-07-27 (Monday) 09:00 UTC
+    mon_ms = int(datetime(2026, 7, 27, 9, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    assert job.next_run_at == mon_ms

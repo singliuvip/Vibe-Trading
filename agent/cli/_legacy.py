@@ -4530,6 +4530,148 @@ def _dispatch_connector(args: argparse.Namespace) -> int:
     return EXIT_USAGE_ERROR
 
 
+def _dispatch_automation(args: argparse.Namespace) -> int:
+    """Route parsed ``automation`` subcommands."""
+    sub = getattr(args, "automation_command", None)
+    if sub == "status":
+        return cmd_automation_status(args.broker, account_id=args.account_id)
+    if sub == "enable":
+        return cmd_automation_enable(args.broker, mode=args.mode, account_id=args.account_id, yes=args.yes)
+    if sub == "disable":
+        return cmd_automation_disable(args.broker, account_id=args.account_id)
+    if sub == "start":
+        return cmd_automation_start(args.broker, account_id=args.account_id)
+    if sub == "stop":
+        return cmd_automation_stop(args.broker, account_id=args.account_id)
+    console.print("[red]automation requires a subcommand.[/red] Try: vibe-trading automation status")
+    return EXIT_USAGE_ERROR
+
+
+def cmd_automation_status(broker: Optional[str], *, account_id: Optional[str] = None) -> int:
+    """Show automation status for a broker."""
+    key = (broker or _DEFAULT_LIVE_BROKER).strip().lower()
+    params = f"broker={key}"
+    if account_id:
+        params += f"&account_id={account_id}"
+    result = _live_api_call("GET", f"/live/automation/status?{params}")
+    if result.get("status") == "error":
+        console.print(f"[red]Could not read automation status:[/red] {result.get('error')}")
+        console.print("[dim]Is the API server running? Start it with `vibe-trading serve`.[/dim]")
+        return EXIT_RUN_FAILED
+    mode = result.get("policy_mode", "disabled")
+    active = result.get("effectively_active", False)
+    color = "green" if active else "dim"
+    console.print(f"Automation for [bold]{key}[/bold]: [{color}]{mode}[/{color}]")
+    console.print(f"  effectively active: {active}")
+    console.print(
+        f"  has mandate: {result.get('has_mandate')}  |  "
+        f"has automation_bounds: {result.get('has_automation_bounds')}  |  "
+        f"mandate expired: {result.get('mandate_expired')}"
+    )
+    console.print(
+        f"  min_signal_score: {result.get('min_signal_score')}  |  "
+        f"max_orders_per_cycle: {result.get('max_orders_per_cycle')}"
+    )
+    return EXIT_SUCCESS
+
+
+def cmd_automation_enable(
+    broker: Optional[str],
+    *,
+    mode: str = "paper_auto",
+    account_id: Optional[str] = None,
+    yes: bool = False,
+) -> int:
+    """Enable automation for a broker (requires confirmation unless --yes)."""
+    key = (broker or _DEFAULT_LIVE_BROKER).strip().lower()
+    if not yes:
+        console.print(f"[bold yellow]You are about to enable [bold]{mode}[/bold] automation for {key}.[/bold yellow]")
+        console.print("This allows the automation pipeline to place orders within your mandate bounds.")
+        try:
+            answer = input("Type 'yes' to confirm: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("[dim]Cancelled.[/dim]")
+            return EXIT_USAGE_ERROR
+        if answer != "yes":
+            console.print("[dim]Cancelled.[/dim]")
+            return EXIT_USAGE_ERROR
+    result = _live_api_call(
+        "POST",
+        "/live/automation/enable",
+        body={"broker": key, "account_id": account_id, "mode": mode, "ack": True},
+    )
+    if result.get("status") == "error":
+        console.print(f"[red]Could not enable automation:[/red] {result.get('error')}")
+        return EXIT_RUN_FAILED
+    if "detail" in result:
+        console.print(f"[red]Could not enable automation:[/red] {result.get('detail')}")
+        return EXIT_RUN_FAILED
+    console.print(f"[green]Automation enabled[/green] for {key} in [bold]{mode}[/bold] mode.")
+    return EXIT_SUCCESS
+
+
+def cmd_automation_disable(broker: Optional[str], *, account_id: Optional[str] = None) -> int:
+    """Disable automation for a broker."""
+    key = (broker or _DEFAULT_LIVE_BROKER).strip().lower()
+    result = _live_api_call(
+        "POST",
+        "/live/automation/disable",
+        body={"broker": key, "account_id": account_id},
+    )
+    if result.get("status") == "error":
+        console.print(f"[red]Could not disable automation:[/red] {result.get('error')}")
+        return EXIT_RUN_FAILED
+    if "detail" in result:
+        console.print(f"[red]Could not disable automation:[/red] {result.get('detail')}")
+        return EXIT_RUN_FAILED
+    console.print(f"[green]Automation disabled[/green] for {key}.")
+    return EXIT_SUCCESS
+
+
+def cmd_automation_start(broker: Optional[str], *, account_id: Optional[str] = None) -> int:
+    """Start the persistent automation runner for a broker."""
+    key = (broker or _DEFAULT_LIVE_BROKER).strip().lower()
+    result = _live_api_call(
+        "POST",
+        "/live/automation/start",
+        body={"broker": key, "account_id": account_id},
+    )
+    if result.get("status") == "error":
+        console.print(f"[red]Could not start automation runner:[/red] {result.get('error')}")
+        console.print("[dim]Is the API server running? Start it with `vibe-trading serve`.[/dim]")
+        return EXIT_RUN_FAILED
+    if "detail" in result:
+        console.print(f"[red]Could not start automation runner:[/red] {result.get('detail')}")
+        return EXIT_RUN_FAILED
+    if result.get("already_running"):
+        console.print(f"[yellow]Automation runner already running[/yellow] for {key}.")
+        return EXIT_SUCCESS
+    console.print(f"[green]Automation runner started[/green] for {key}.")
+    console.print("[dim]Check it with `vibe-trading automation status`.[/dim]")
+    return EXIT_SUCCESS
+
+
+def cmd_automation_stop(broker: Optional[str], *, account_id: Optional[str] = None) -> int:
+    """Stop the persistent automation runner for a broker."""
+    key = (broker or _DEFAULT_LIVE_BROKER).strip().lower()
+    result = _live_api_call(
+        "POST",
+        "/live/automation/stop",
+        body={"broker": key, "account_id": account_id},
+    )
+    if result.get("status") == "error":
+        console.print(f"[red]Could not stop automation runner:[/red] {result.get('error')}")
+        return EXIT_RUN_FAILED
+    if "detail" in result:
+        console.print(f"[red]Could not stop automation runner:[/red] {result.get('detail')}")
+        return EXIT_RUN_FAILED
+    if not result.get("was_running"):
+        console.print(f"[dim]Automation runner was not running for {key}.[/dim]")
+        return EXIT_SUCCESS
+    console.print(f"[green]Automation runner stopped[/green] for {key}.")
+    return EXIT_SUCCESS
+
+
 # ---------------------------------------------------------------------------
 # CLI entrypoint
 # ---------------------------------------------------------------------------
@@ -4769,6 +4911,32 @@ def _build_parser() -> argparse.ArgumentParser:
     ):
         p = connector_subparsers.add_parser(name, help=help_text)
         _add_connector_profile_arg(p)
+
+    # --- Automation control-plane subcommands ---
+    automation_parser = subparsers.add_parser("automation", help="Manage live-trading automation")
+    automation_subparsers = automation_parser.add_subparsers(dest="automation_command")
+
+    automation_status = automation_subparsers.add_parser("status", help="Show automation status for a broker")
+    automation_status.add_argument("broker", nargs="?", default=None, help="Broker key (default: robinhood)")
+    automation_status.add_argument("--account-id", dest="account_id", default=None)
+
+    automation_enable = automation_subparsers.add_parser("enable", help="Enable automation (paper_auto/live_bounded)")
+    automation_enable.add_argument("broker", nargs="?", default=None, help="Broker key (default: robinhood)")
+    automation_enable.add_argument("--mode", default="paper_auto", choices=["paper_auto", "live_bounded"])
+    automation_enable.add_argument("--account-id", dest="account_id", default=None)
+    automation_enable.add_argument("-y", "--yes", action="store_true", help="Acknowledge without prompting")
+
+    automation_disable = automation_subparsers.add_parser("disable", help="Disable automation")
+    automation_disable.add_argument("broker", nargs="?", default=None, help="Broker key (default: robinhood)")
+    automation_disable.add_argument("--account-id", dest="account_id", default=None)
+
+    automation_start = automation_subparsers.add_parser("start", help="Start the automation runner")
+    automation_start.add_argument("broker", nargs="?", default=None, help="Broker key (default: robinhood)")
+    automation_start.add_argument("--account-id", dest="account_id", default=None)
+
+    automation_stop = automation_subparsers.add_parser("stop", help="Stop the automation runner")
+    automation_stop.add_argument("broker", nargs="?", default=None, help="Broker key (default: robinhood)")
+    automation_stop.add_argument("--account-id", dest="account_id", default=None)
 
     # Alpha Zoo subcommands (registered via cli_handlers.add_subparser)
     from src.factors.cli_handlers import add_subparser as _add_alpha_subparser
@@ -5655,6 +5823,8 @@ def main(argv: list[str] | None = None) -> int:
         return _coerce_exit_code(_hyp_dispatch(args))
     if args.command == "connector":
         return _coerce_exit_code(_dispatch_connector(args))
+    if getattr(args, "command", None) == "automation":
+        return _coerce_exit_code(_dispatch_automation(args))
     if args.command == "memory":
         if args.memory_command == "list":
             return _coerce_exit_code(cmd_memory_list(args.memory_type))

@@ -22,13 +22,13 @@ from typing import Any, Dict, Optional
 #   * a bare positive integer (interval in milliseconds), e.g. "60000"
 #   * a simplified cron expression with 5 fields, e.g. "0 */6 * * *"
 #     Fields: minute hour day-of-month month day-of-week
-#     Each field may be: number, *, or */n
+#     Each field may be: number, *, */n, or a range (e.g. 1-5)
 _INTERVAL_MS_RE = re.compile(r"^[1-9][0-9]*$")
-_CRON_FIELD_RE = re.compile(r"^(\*|\*/[1-9][0-9]*|[0-9]+)$")
+_CRON_FIELD_RE = re.compile(r"^(\*|\*/[1-9][0-9]*|[0-9]+(-[0-9]+)?)$")
 _CRON_PARTS = 5
 # Inclusive (low, high) bounds per cron field: minute hour day-of-month month
-# day-of-week. A bare number and a ``*/n`` step are both validated against the
-# field's high bound so out-of-range values (e.g. minute ``99``) are rejected.
+# day-of-week. A bare number, a ``*/n`` step, and a range ``a-b`` are all
+# validated against the field's bounds so out-of-range values are rejected.
 _CRON_BOUNDS = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
 
 
@@ -53,12 +53,22 @@ def validate_schedule(schedule: str) -> None:
         raise ValueError(f"schedule must be a positive integer (ms) or a 5-field cron string; got: {schedule!r}")
     for part, (low, high) in zip(parts, _CRON_BOUNDS):
         if not _CRON_FIELD_RE.fullmatch(part):
-            raise ValueError(f"cron field {part!r} is not valid; each field must be *, */n, or a number")
+            raise ValueError(f"cron field {part!r} is not valid; each field must be *, */n, a number, or a range (e.g. 1-5)")
         if part == "*":
             continue
-        value = int(part[2:]) if part.startswith("*/") else int(part)
-        if not low <= value <= high:
-            raise ValueError(f"cron field {part!r} is out of range; expected {low}-{high}")
+        if part.startswith("*/"):
+            value = int(part[2:])
+            if not low <= value <= high:
+                raise ValueError(f"cron field {part!r} is out of range; expected {low}-{high}")
+        elif "-" in part:
+            lo_s, hi_s = part.split("-", 1)
+            lo_v, hi_v = int(lo_s), int(hi_s)
+            if not (low <= lo_v <= high and low <= hi_v <= high and lo_v <= hi_v):
+                raise ValueError(f"cron range {part!r} is invalid; expected {low}-{high} with start <= end")
+        else:
+            value = int(part)
+            if not low <= value <= high:
+                raise ValueError(f"cron field {part!r} is out of range; expected {low}-{high}")
 
 
 # ---------------------------------------------------------------------------

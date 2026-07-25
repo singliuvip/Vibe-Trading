@@ -264,6 +264,10 @@ from src.api.swarm_routes import _get_swarm_runtime  # noqa: F401, E402
 from src.api.live_routes import register_live_routes  # noqa: E402
 register_live_routes(app)
 
+# --- Live automation control plane ---
+from src.api.automation_routes import register_automation_routes  # noqa: E402
+register_automation_routes(app)
+
 from src.api.live_routes import (  # noqa: F401, E402
     CommitMandateRequest,
     LiveHaltRequest,

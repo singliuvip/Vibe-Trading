@@ -551,6 +551,7 @@ class AgentLoop:
         self._persistent_memory = persistent_memory
         self._run_iteration: int = 0
         self._has_run = False
+        self._invocation_context: Optional[Any] = None
 
     def cancel(self) -> None:
         """Cancel the current loop.
@@ -576,6 +577,7 @@ class AgentLoop:
         # Preserve cancellation accepted while the first run is queued.  A
         # completed loop may still be reused deliberately, so clear terminal
         # state only after the first run has begun.
+        self._invocation_context = invocation_context
         if self._has_run:
             self._cancel_event.clear()
         else:
@@ -1093,6 +1095,25 @@ class AgentLoop:
         focus_topic = ""
         to_execute = []
 
+        # Research-only hard isolation: reject broker write tools at execution layer
+        if self._invocation_context and getattr(self._invocation_context, 'research_only', False):
+            for tc in tool_calls:
+                if self._is_broker_write_tool(tc.name):
+                    error_msg = json.dumps({
+                        "status": "error",
+                        "error_code": "research_only_violation",
+                        "tool": tc.name,
+                        "message": f"Tool '{tc.name}' is a broker write operation and is blocked in research-only mode. This execution context does not permit trading operations."
+                    }, ensure_ascii=False)
+                    messages.append(context.format_tool_result(tc.id, tc.name, error_msg))
+                    trace.write({"type": "tool_blocked", "iter": iteration, "tool": tc.name, "reason": "research_only"})
+                    react_trace.append({"type": "tool_blocked", "tool": tc.name, "reason": "research_only"})
+                    logger.warning(f"Blocked broker write tool in research-only mode: {tc.name}")
+            # Filter out blocked tools
+            tool_calls = [tc for tc in tool_calls if not self._is_broker_write_tool(tc.name)]
+            if not tool_calls:
+                return False, ""
+
         # Cancelled before this turn's tools ran — skip execution entirely.
         if self._cancel_event.is_set():
             return compact_requested, focus_topic
@@ -1128,6 +1149,29 @@ class AgentLoop:
             self._batch_execute(to_execute, context, messages, trace, react_trace, iteration)
 
         return compact_requested, focus_topic
+
+    def _is_broker_write_tool(self, tool_name: str) -> bool:
+        """Return whether a tool is a broker write operation (place/cancel order).
+
+        Broker write tools are identified by:
+        1. Explicit trading connector tools: trading_place_order, trading_cancel_order
+        2. MCP remote tools with write classification (name contains place_order/cancel_order)
+
+        This is a conservative check: only tools that directly mutate broker state are blocked.
+        Read-only trading tools (trading_account, trading_positions, trading_orders) are allowed.
+        """
+        # Explicit trading connector write tools
+        if tool_name in {"trading_place_order", "trading_cancel_order"}:
+            return True
+
+        # MCP remote tools: check if name contains broker write patterns
+        # MCP tools are prefixed with server name, e.g. "alpaca_place_order", "okx_cancel_order"
+        broker_write_patterns = {"place_order", "cancel_order", "cancel_all_orders"}
+        for pattern in broker_write_patterns:
+            if pattern in tool_name:
+                return True
+
+        return False
 
     def _batch_execute(
         self,

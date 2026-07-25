@@ -108,6 +108,9 @@ def _parse_cron_field(part: str, low: int, high: int) -> set[int] | None:
     if part.startswith("*/"):
         step = int(part[2:])
         return set(range(low, high + 1, step))
+    if "-" in part:
+        lo_s, hi_s = part.split("-", 1)
+        return set(range(int(lo_s), int(hi_s) + 1))
     return {int(part)}
 
 

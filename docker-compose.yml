@@ -15,7 +15,7 @@ services:
       - agent/.env
     environment:
       - VIBE_TRADING_TRUST_DOCKER_LOOPBACK=1
-      # Allow OpenClaw / other Docker containers to reach the MCP SSE endpoint
+      # Allow OpenClaw / other Docker containers to reach the MCP Streamable HTTP endpoint
       # via host.docker.internal. The default loopback-only allow-list rejects
       # the "host.docker.internal" Host header, so MCP tools are invisible to
       # containers on the same Docker network.
@@ -81,12 +81,12 @@ services:
     cpus: 2
     pids_limit: 512
     restart: unless-stopped
-    # 同时启动 MCP SSE（后台）和 API 服务（前台 exec）
+    # 同时启动 Streamable HTTP MCP（后台）和 API 服务（前台 exec）
     command:
       - sh
       - -c
       - >
-        vibe-trading-mcp --transport sse --host 0.0.0.0 --port 8765 &
+        vibe-trading-mcp --transport http --host 0.0.0.0 --port 8765 &
         exec vibe-trading serve --host 0.0.0.0 --port 8899
 
   frontend:

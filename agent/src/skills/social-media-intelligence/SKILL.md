@@ -1,559 +1,239 @@
----
+﻿---
 name: social-media-intelligence
-description: "Social media intelligence: financial signal extraction from Twitter/X, Telegram, Discord, and Reddit for sentiment-driven trading strategies."
+description: "A股社媒情绪情报：东方财富股吧结构化采集 + 雪球/微博非结构化抓取 + LLM情绪量化 + 热度/看多比例/新人指数/KOL一致性信号构建，面向A股情绪驱动策略。"
 category: tool
 ---
 
-# Social Media Intelligence
+# A股社媒情绪情报（Social Media Intelligence）
 
-> This skill integrates financial-intelligence collection methods and quantitative applications across Twitter/X, Telegram, Discord, and Reddit.
-> Inspired by `himself65/finance-skills` modules such as `discord-reader`, `telegram-reader`, and `twitter-reader`.
-
----
-
-## 1. Overview of the Four Major Financial Social Platforms
-
-### 1.1 Twitter/X — The FinTwit Ecosystem
-
-**Core roles**
-
-| Role Type | Representative Account Traits | Signal Value |
-|---------|------------|---------|
-| Sell-side analyst | Institutional backing, dense posting around earnings | Medium, somewhat lagging |
-| Fund manager | Holdings views, industry judgment | High, but mixed with subjective opinion |
-| Macro commentator | Fed interpretation, macro-data reaction | High, a good sentiment barometer |
-| Crypto KOL | On-chain interpretation, project endorsement | Highly volatile, high manipulation risk |
-| Retail noise | Meme spread, herd sentiment | Contrarian signal value at extremes |
-
-**Core FinTwit circles**
-- `$TICKER` cashtag system directly maps discussion to the asset
-- Earnings-season sentiment patterns before and after reports
-- Real-time reaction speed to policy / macro events, often 15-60 minutes ahead of traditional media
+> 本技能整合 A 股社媒生态的情绪采集与量化方法，覆盖东方财富股吧（结构化）、雪球/微博（非结构化），输出热度指数、看多比例、新人指数、KOL一致性等情绪信号。情绪打分由 `social_analyst` agent 调 LLM 完成（与 event-driven skill 的"采集原始数据、上游打分"范式一致），本技能只提供采集与聚合方法。
 
 ---
 
-### 1.2 Telegram — The Core Venue for Crypto Intelligence
+## 1. A股社媒情绪生态概述
 
-**Channel types**
+A股散户占比高，社媒情绪对短期定价影响显著。核心阵地：
 
-| Channel Type | Content Traits | How to Use |
-|---------|---------|---------|
-| Signal channels | Specific buy/sell levels, stop-loss / take-profit | Use as a sentiment thermometer, not for blind copy-trading |
-| Research push channels | Institutional PDF reports, on-chain data | Aggregate information and extract key numbers |
-| Macro flash channels | Real-time interpretation of FOMC, CPI, etc. | Event-driven signals |
-| Official project channels | Tokenomics updates, partnership announcements | Potential alpha, but requires filtering |
-| Whale alert channels | Large on-chain transfer alerts | Capital-flow signal |
+| 平台 | 结构化程度 | 内容特征 | 信号价值 |
+|------|-----------|---------|---------|
+| 东方财富股吧（guba） | 高（结构化帖子元数据） | 个股讨论最集中，散户情绪温度计 | 热度/看多比例/新人指数核心源 |
+| 雪球 | 中（HTML/部分API） | 偏价值/趋势投资者，长帖多 | KOL一致性、机构观点扩散 |
+| 微博 | 低（非结构化） | 财经大V + 散户短帖，传播快 | 事件驱动情绪脉冲 |
+| 财经论坛（淘股吧/理想论坛） | 中 | 短线游资/打板客聚集 | 题材热度、龙头股情绪 |
 
----
-
-### 1.3 Discord — Quant Communities and Project Ecosystems
-
-**Important community types**
-- Quant / DeFi research communities such as Degen Spartan and Messari Research
-- Official crypto project Discords with governance discussion and development progress
-- Trader communities focused on options flow and on-chain analysis
-- NFT / GameFi projects with floor-price alerts and activity monitoring
-
-**Distinctive value of Discord**
-- Community activity directly reflects project health
-- Developer channels such as `#dev` and `#build` show implementation activity
-- Governance participation indicates the willingness of token holders to stay involved
+**采集分工**：
+- 股吧 → `get_a_share_social_sentiment` 工具（结构化帖子元数据，免鉴权）
+- 雪球/微博/论坛 → `read_url` 工具（非结构化 HTML 抓取 + 解析）
 
 ---
 
-### 1.4 Reddit — A Barometer of Retail Sentiment
+## 2. 数据采集方法
 
-**Core subreddits**
+### 2.1 东方财富股吧（结构化）
 
-| Subreddit | Core User Base | Main Signal |
-|-------|---------|---------|
-| r/wallstreetbets | Retail options traders | Meme-stock heat, abnormal options chatter |
-| r/investing | Value-oriented retail investors | Long-horizon sentiment, ETF flow |
-| r/cryptocurrency | Crypto retail | BTC / ETH cycle sentiment |
-| r/stocks | General stock discussants | Earnings-season sentiment |
-| r/options | Options-strategy community | Unusual IV-related topics |
+**工具**：`get_a_share_social_sentiment`（`src.tools.a_share_social_sentiment_tool.AShareSocialSentimentTool`）
 
----
-
-## 2. Data Collection Methods
-
-### 2.1 Twitter/X Data Collection
-
-**Tooling options**
+免鉴权、按源 IP 限流（经 `eastmoney` 节流 bucket）。返回个股股吧帖子元数据，**不含情绪打分**。
 
 ```python
-# Option A: Official API v2 (paid, basic tier starts at $100/month)
-# Best for: production environments where compliance is the priority
-from tweepy import Client
+from src.tools.a_share_social_sentiment_tool import AShareSocialSentimentTool
 
-client = Client(bearer_token=os.getenv("TWITTER_BEARER_TOKEN"))
-
-# Search tweets discussing a cashtag over the last 7 days
-def fetch_cashtag_tweets(ticker: str, max_results: int = 100) -> list[dict]:
-    """Collect Twitter discussion data for a given ticker.
-
-    Args:
-        ticker: Ticker symbol such as AAPL or BTC
-        max_results: Max number of returned tweets, between 10 and 100
-
-    Returns:
-        List of tweets, each containing id / text / created_at / public_metrics
-    """
-    query = f"${ticker} -is:retweet lang:en"
-    tweets = client.search_recent_tweets(
-        query=query,
-        max_results=max_results,
-        tweet_fields=["created_at", "public_metrics", "author_id"],
-    )
-    return [t.data for t in tweets.data or []]
-
-
-# Option B: ntscraper (unofficial, free, rate-limited)
-# Best for: research / historical backtesting
-# pip install ntscraper
-from ntscraper import Nitter
-
-scraper = Nitter()
-tweets = scraper.get_tweets("$AAPL", mode="term", number=50)
+# 茅台股吧最近 50 条帖子元数据
+print(AShareSocialSentimentTool().execute(code="600519.SH", limit=50))
 ```
 
-**Data schema (Twitter JSON Schema)**
-
+**返回信封**：
 ```json
 {
-  "platform": "twitter",
-  "collected_at": "2026-03-29T08:00:00Z",
-  "query": "$AAPL",
+  "ok": true,
+  "market": "a_share",
+  "source": "guba",
+  "data": {
+    "code": "600519.SH",
+    "secid": "1.600519",
+    "posts": [
+      {"title", "author", "published", "read_count", "comment_count", "url"}
+    ]
+  }
+}
+```
+
+**字段说明**：
+
+| 字段 | 描述 |
+|------|------|
+| title | 帖子标题（裁剪至120字符） |
+| author | 发帖人昵称 |
+| published | 发布时间 |
+| read_count | 阅读数（热度代理） |
+| comment_count | 评论数（参与度代理） |
+| url | 帖子链接 |
+
+**采集频率建议**：
+- 财报季/重大事件：每30分钟
+- 常规监控：每小时
+- 历史回填：每日批量
+
+### 2.2 雪球（非结构化）
+
+**工具**：`read_url`（抓取个股雪球专页 HTML，解析帖子列表）
+
+雪球无稳定公开 JSON 端点，用 `read_url` 抓取 `https://xueqiu.com/S/<code>` 页面，正则解析帖子标题/作者/互动数。
+
+```python
+# 伪代码：雪球专页抓取 + 解析
+from src.tools.web_reader_tool import WebReaderTool
+import re
+
+html = WebReaderTool().execute(url="https://xueqiu.com/S/SH600519")
+# 解析逻辑由 social_analyst agent 完成
+```
+
+**数据 schema（雪球）**：
+```json
+{
+  "platform": "xueqiu",
+  "collected_at": "2026-07-28T08:00:00Z",
+  "code": "600519.SH",
   "items": [
-    {
-      "id": "tweet_id_string",
-      "text": "tweet text",
-      "created_at": "ISO8601 timestamp",
-      "author": {
-        "id": "user_id",
-        "username": "handle",
-        "followers_count": 50000,
-        "verified": false
-      },
-      "metrics": {
-        "like_count": 120,
-        "retweet_count": 45,
-        "reply_count": 23,
-        "quote_count": 8
-      },
-      "sentiment_score": null,
-      "tags": ["$AAPL", "#earnings"]
-    }
+    {"title", "author", "published", "reply_count", "retweet_count", "like_count", "url"}
   ]
 }
 ```
 
-**Suggested collection frequency**
-- Earnings season / major events: real time, poll every 5 minutes
-- Routine monitoring: hourly
-- Historical backfill: daily batch
+### 2.3 微博（非结构化）
 
----
+**工具**：`read_url`（抓取财经话题页/个股超话）
 
-### 2.2 Telegram Data Collection
-
-**Tooling**
+微博财经话题（如 `#A股#`、`#茅台#`）和个股超话是散户情绪脉冲源。用 `read_url` 抓取话题页，解析短帖文本/转发数/评论数。
 
 ```python
-# Telethon — official MTProto client, requires API_ID + API_HASH
-# pip install telethon
-from telethon.sync import TelegramClient
-from telethon import functions
-
-API_ID = int(os.getenv("TELEGRAM_API_ID"))
-API_HASH = os.getenv("TELEGRAM_API_HASH")
-
-async def fetch_channel_messages(
-    channel_username: str,
-    limit: int = 200,
-    offset_date: datetime | None = None,
-) -> list[dict]:
-    """Collect historical messages from a Telegram channel.
-
-    Args:
-        channel_username: Channel username without @, e.g. "whale_alert"
-        limit: Maximum number of messages
-        offset_date: Start time to backtrack from
-
-    Returns:
-        List of messages containing id / text / date / views / forwards
-    """
-    async with TelegramClient("session", API_ID, API_HASH) as client:
-        messages = []
-        async for msg in client.iter_messages(
-            channel_username, limit=limit, offset_date=offset_date
-        ):
-            if msg.text:
-                messages.append({
-                    "id": msg.id,
-                    "text": msg.text,
-                    "date": msg.date.isoformat(),
-                    "views": getattr(msg, "views", 0),
-                    "forwards": getattr(msg, "forwards", 0),
-                })
-        return messages
+# 伪代码：微博话题抓取
+html = WebReaderTool().execute(url="https://weibo.com/search?q=%23%E8%8C%85%E5%8F%B0%23")
 ```
 
-**Data schema (Telegram JSON Schema)**
-
+**数据 schema（微博）**：
 ```json
 {
-  "platform": "telegram",
-  "channel": "whale_alert",
-  "collected_at": "2026-03-29T08:00:00Z",
+  "platform": "weibo",
+  "collected_at": "2026-07-28T08:00:00Z",
+  "query": "#茅台#",
   "items": [
-    {
-      "id": 12345,
-      "text": "message text",
-      "date": "ISO8601 timestamp",
-      "views": 85000,
-      "forwards": 320,
-      "has_media": false,
-      "reply_to_msg_id": null,
-      "sentiment_score": null
-    }
+    {"text", "author", "published", "repost_count", "comment_count", "like_count"}
   ]
 }
 ```
 
-**Suggested collection frequency**
-- Whale-alert / flash channels: real-time push, webhook mode
-- Signal channels: every 30 minutes
-- Research channels: daily
+### 2.4 合规与隐私
+
+- 股吧/雪球/微博均为公开页面，采集公开帖子元数据
+- 用户ID以掩码形式存储（如哈希），不保留原始用户名
+- 原始文本本地存储，不通过公开API暴露
+- 定期清理30天以上原始数据，仅保留聚合指标
 
 ---
 
-### 2.3 Discord Data Collection
+## 3. 情绪量化方法
 
-**Tooling**
+### 3.1 单条文本情绪打分
 
-```python
-# discord.py — official Bot API, requires Bot Token + server invitation permission
-# pip install discord.py
-import discord
-from discord.ext import commands
+#### 方案A：LLM打分（首选，精度最高）
 
-async def fetch_channel_history(
-    channel_id: int,
-    limit: int = 500,
-    after: datetime | None = None,
-) -> list[dict]:
-    """Collect message history from a Discord channel.
-
-    Args:
-        channel_id: Discord channel ID
-        limit: Maximum number of messages, capped at 500 per request
-        after: Start timestamp to backtrack from
-
-    Returns:
-        List of messages containing id / content / timestamp / author / reactions
-    """
-    bot = commands.Bot(command_prefix="!")
-    messages = []
-
-    @bot.event
-    async def on_ready():
-        channel = bot.get_channel(channel_id)
-        async for msg in channel.history(limit=limit, after=after):
-            messages.append({
-                "id": str(msg.id),
-                "content": msg.content,
-                "timestamp": msg.created_at.isoformat(),
-                "author": {
-                    "id": str(msg.author.id),
-                    "name": msg.author.name,
-                    "bot": msg.author.bot,
-                },
-                "reaction_count": sum(r.count for r in msg.reactions),
-                "attachments": len(msg.attachments),
-            })
-        await bot.close()
-
-    await bot.start(os.getenv("DISCORD_BOT_TOKEN"))
-    return messages
-```
-
-**Data schema (Discord JSON Schema)**
-
-```json
-{
-  "platform": "discord",
-  "guild_id": "server_id_string",
-  "channel_id": "channel_id_string",
-  "channel_name": "general-trading",
-  "collected_at": "2026-03-29T08:00:00Z",
-  "items": [
-    {
-      "id": "message_id_string",
-      "content": "message text",
-      "timestamp": "ISO8601 timestamp",
-      "author": {
-        "id": "user_id_string",
-        "name": "username#1234",
-        "roles": ["Member", "Whale"],
-        "bot": false
-      },
-      "reaction_count": 42,
-      "thread_count": 3,
-      "sentiment_score": null
-    }
-  ]
-}
-```
-
-**Suggested collection frequency**
-- Active trading communities: hourly
-- Official project channels: every 4 hours
-- Governance channels: daily
-
----
-
-### 2.4 Reddit Data Collection
-
-**Tooling**
+输出 `-1.0..1.0`，与 event-driven skill 一致。适合中文财经语境（股吧/雪球/微博均为中文，VADER/FinBERT 英文模型不适用）。
 
 ```python
-# PRAW — official Reddit Python wrapper, free API
-# pip install praw
-import praw
-
-def fetch_subreddit_posts(
-    subreddit_name: str,
-    mode: str = "hot",
-    limit: int = 100,
-    time_filter: str = "day",
-) -> list[dict]:
-    """Collect hot posts and related metadata from a subreddit.
+def llm_sentiment(text: str, code: str | None = None) -> dict:
+    """用 LLM 分析中文财经文本情绪。
 
     Args:
-        subreddit_name: Subreddit name, e.g. "wallstreetbets"
-        mode: Sort mode: "hot" / "new" / "top" / "rising"
-        limit: Maximum number of posts
-        time_filter: Time filter for top mode, e.g. "hour" / "day" / "week"
+        text: 帖子标题/正文
+        code: 关联个股代码
 
     Returns:
-        List of posts containing id / title / score / comments / created_utc
+        {'score': float[-1.0,1.0], 'label': 'bullish'|'bearish'|'neutral', 'reason': str}
     """
-    reddit = praw.Reddit(
-        client_id=os.getenv("REDDIT_CLIENT_ID"),
-        client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
-        user_agent="vibe-trading/1.0",
-    )
-    subreddit = reddit.subreddit(subreddit_name)
-    posts = []
+    context = f"个股: {code}\n" if code else ""
+    prompt = f"""{context}分析以下中文财经社媒文本的情绪，返回JSON：
+{{"score": <-1.0到1.0的浮点>, "label": <"bullish"|"bearish"|"neutral">, "reason": <一句话解释>}}
 
-    fetch_fn = {
-        "hot": subreddit.hot,
-        "new": subreddit.new,
-        "top": lambda limit: subreddit.top(time_filter=time_filter, limit=limit),
-        "rising": subreddit.rising,
-    }[mode]
-
-    for post in fetch_fn(limit=limit):
-        posts.append({
-            "id": post.id,
-            "title": post.title,
-            "selftext": post.selftext[:500],  # truncated body
-            "score": post.score,
-            "upvote_ratio": post.upvote_ratio,
-            "num_comments": post.num_comments,
-            "created_utc": post.created_utc,
-            "url": post.url,
-            "flair": post.link_flair_text,
-        })
-    return posts
-```
-
-**Data schema (Reddit JSON Schema)**
-
-```json
-{
-  "platform": "reddit",
-  "subreddit": "wallstreetbets",
-  "collected_at": "2026-03-29T08:00:00Z",
-  "items": [
-    {
-      "id": "post_id",
-      "title": "post title",
-      "selftext": "body summary (500 chars)",
-      "score": 12500,
-      "upvote_ratio": 0.94,
-      "num_comments": 847,
-      "created_utc": 1743206400.0,
-      "flair": "YOLO",
-      "mentioned_tickers": ["GME", "AMC"],
-      "sentiment_score": null
-    }
-  ]
-}
-```
-
-**Suggested collection frequency**
-- r/wallstreetbets around the market open: every 30 minutes
-- r/investing / r/stocks: every 4 hours
-- r/cryptocurrency: hourly
-
----
-
-### 2.5 Compliance and Privacy Notes
-
-**Must comply with**
-- Twitter API terms: do not resell data to third parties; obey rate limits such as the basic-tier 500,000 tweets/month allowance
-- Telegram personal messages must not be collected; only public channels / groups are in scope
-- Discord must be accessed through the official Bot API; self-bots violate ToS and may get banned
-- Reddit PRAW rate limit: 60 requests/minute for authenticated users
-
-**Data storage rules**
-- Store user IDs in masked form such as hashes; do not retain raw usernames
-- Store raw text locally only and do not expose it through public APIs
-- Periodically purge raw data older than 30 days and keep only aggregated metrics
-
----
-
-## 3. Sentiment Quantification Methodology
-
-### 3.1 Text Sentiment Scoring
-
-#### Option A: VADER (Lightweight, English, Good for Short Social Posts)
-
-```python
-# pip install vaderSentiment
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-
-def vader_score(text: str) -> dict:
-    """Score the sentiment of social-media text using VADER.
-
-    Args:
-        text: Raw social-media text such as a tweet, post, or message
-
-    Returns:
-        {'pos': float, 'neg': float, 'neu': float, 'compound': float}
-        compound is in [-1, 1], where > 0.05 is positive and < -0.05 is negative
-    """
-    analyzer = SentimentIntensityAnalyzer()
-    return analyzer.polarity_scores(text)
-```
-
-**Characteristics**: No GPU required, suitable for high-frequency batch processing; weaker on finance-specific slang such as "bull" or "moon".
-
-#### Option B: FinBERT (Finance-Specific BERT)
-
-```python
-# pip install transformers torch
-from transformers import pipeline
-
-_finbert = None
-
-def get_finbert():
-    """Lazily load the FinBERT model. First call takes roughly 1-2 seconds."""
-    global _finbert
-    if _finbert is None:
-        _finbert = pipeline(
-            "text-classification",
-            model="ProsusAI/finbert",
-            tokenizer="ProsusAI/finbert",
-        )
-    return _finbert
-
-def finbert_score(text: str) -> dict:
-    """Classify sentiment in finance text using FinBERT.
-
-    Args:
-        text: Finance-related text, truncated to 512 tokens
-
-    Returns:
-        {'label': 'positive'|'negative'|'neutral', 'score': float}
-    """
-    result = get_finbert()(text[:512])[0]
-    score_map = {"positive": 1.0, "neutral": 0.0, "negative": -1.0}
-    return {
-        "label": result["label"],
-        "score": score_map[result["label"]] * result["score"],
-    }
-```
-
-**Characteristics**: Stronger understanding of finance terms such as earnings, guidance, beat/miss; GPU acceleration is preferred for large batches.
-
-#### Option C: LLM-Based (Highest Precision, Best for Long and Complex Text)
-
-```python
-def llm_sentiment(text: str, ticker: str | None = None) -> dict:
-    """Use an LLM to analyze sentiment in complex finance text.
-
-    Args:
-        text: Raw text such as a report summary or Discord thread
-        ticker: Related asset symbol, if available
-
-    Returns:
-        {'score': float[-1,1], 'label': str, 'reason': str}
-
-    Note:
-        Each call consumes roughly 500 tokens.
-        Use only on samples where VADER / FinBERT confidence is below 0.6.
-    """
-    context = f"Ticker: {ticker}\n" if ticker else ""
-    prompt = f"""{context}Analyze the sentiment of the following finance text and return JSON:
-{{"score": <float from -1 to 1>, "label": <"bullish"|"bearish"|"neutral">, "reason": <one-sentence explanation>}}
-
-Text: {text[:1000]}"""
-    # Call the current agent's LLM interface
+文本: {text[:500]}"""
     from src.providers.base import get_llm
     response = get_llm().invoke(prompt)
     import json
     return json.loads(response.content)
 ```
 
-**Recommendation by scenario**
+**评分尺度**：
+| score | label | 含义 |
+|-------|-------|------|
+| > 0.5 | bullish | 强烈看多 |
+| 0.1 ~ 0.5 | bullish | 偏多 |
+| -0.1 ~ 0.1 | neutral | 中性 |
+| -0.5 ~ -0.1 | bearish | 偏空 |
+| < -0.5 | bearish | 强烈看空 |
 
-| Scenario | Recommended Method | Reason |
-|-----|---------|------|
-| Real-time Twitter / Reddit batch processing | VADER | Low latency, no GPU required |
-| Earnings-related text | FinBERT | Strong finance-term understanding |
-| Telegram research summaries | LLM-based | Better on long-form and nuanced meaning |
-| Multi-turn Discord discussion | FinBERT + LLM | Good balance of precision and cost |
+#### 方案B：规则词典兜底（LLM不可用时）
 
----
+中文财经情绪词典，快速批量打分：
 
-### 3.2 Discussion-Buzz Metrics
+```python
+_BULLISH_WORDS = {"涨停", "牛市", "利好", "突破", "加仓", "抄底", "龙头", "主升", "放量上涨"}
+_BEARISH_WORDS = {"跌停", "崩盘", "利空", "破位", "割肉", "清仓", "暴雷", "跳水", "放量下跌"}
+
+def lexicon_score(text: str) -> float:
+    """规则词典打分，输出 -1.0..1.0。
+
+    Args:
+        text: 帖子文本
+
+    Returns:
+        情绪分：正向词命中数 - 负向词命中数，归一化到 [-1, 1]。
+        无命中返回 0.0。
+    """
+    bull = sum(1 for w in _BULLISH_WORDS if w in text)
+    bear = sum(1 for w in _BEARISH_WORDS if w in text)
+    total = bull + bear
+    if total == 0:
+        return 0.0
+    return (bull - bear) / total
+```
+
+**场景推荐**：
+| 场景 | 推荐方案 | 原因 |
+|------|---------|------|
+| 股吧/雪球批量打分 | LLM | 中文财经语境理解最佳 |
+| 实时高频打分 | 规则词典 | 低延迟，无API成本 |
+| 微博事件脉冲 | LLM | 短文本+反讽多，需语义理解 |
+| 词典置信度低时 | LLM兜底 | 复杂语义需LLM |
+
+### 3.2 讨论热度指标
 
 ```python
 import pandas as pd
 import numpy as np
 
 def compute_buzz_metrics(df: pd.DataFrame, window: str = "1H") -> pd.DataFrame:
-    """Compute time-series discussion-buzz metrics.
+    """计算时序讨论热度指标。
 
     Args:
-        df: Message DataFrame containing timestamp / platform / ticker columns
-        window: Aggregation window, such as "1H" / "4H" / "1D"
+        df: 帖子DataFrame，含 timestamp / platform / code 列
+        window: 聚合窗口，如 "1H" / "4H" / "1D"
 
     Returns:
-        Time-series DataFrame with:
-        - msg_count: message volume
-        - unique_authors: count of distinct active users
-        - topic_freq: topic frequency as ticker volume / total message volume
-        - engagement_score: weighted interaction count
-        - buzz_zscore: message-volume Z-score for anomaly detection
+        时序DataFrame：msg_count / unique_authors / topic_freq / buzz_zscore
     """
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.set_index("timestamp").sort_index()
 
     result = df.resample(window).agg(
-        msg_count=("text", "count"),
-        unique_authors=("author_id", "nunique"),
-        total_engagement=("engagement", "sum"),
+        msg_count=("title", "count"),
+        unique_authors=("author", "nunique"),
+        total_engagement=("read_count", "sum"),
     )
 
-    # Topic frequency, i.e. relative buzz.
-    total = df.resample(window)["text"].count()
+    total = df.resample(window)["title"].count()
     result["topic_freq"] = result["msg_count"] / total.replace(0, np.nan)
 
-    # Z-score anomaly detection using a 30-window rolling baseline.
     roll_mean = result["msg_count"].rolling(30, min_periods=5).mean()
     roll_std = result["msg_count"].rolling(30, min_periods=5).std()
     result["buzz_zscore"] = (result["msg_count"] - roll_mean) / roll_std.replace(0, np.nan)
@@ -561,15 +241,13 @@ def compute_buzz_metrics(df: pd.DataFrame, window: str = "1H") -> pd.DataFrame:
     return result
 ```
 
-**Key buzz metrics**
-- `msg_count`: raw message count, measures absolute attention
-- `unique_authors`: distinct users, reduces bot / spam distortion
-- `buzz_zscore > 2.0`: abnormal buzz, triggers alerts
-- `topic_freq`: relative buzz, controls for broad market-wide sentiment amplification
+**关键热度指标**：
+- `msg_count`：帖子数，绝对关注度
+- `unique_authors`：独立发帖人，降低机器人/营销号干扰
+- `buzz_zscore > 2.0`：异常热度，触发预警
+- `topic_freq`：相对热度，控制全市场情绪放大
 
----
-
-### 3.3 Sentiment Extremes (Fear / Greed Indicator)
+### 3.3 情绪极值（恐贪指标）
 
 ```python
 def compute_fear_greed_index(
@@ -577,103 +255,69 @@ def compute_fear_greed_index(
     buzz_series: pd.Series,
     lookback: int = 30,
 ) -> pd.Series:
-    """Construct a CNN-style fear-and-greed index.
+    """构建A股恐贪指数（社媒维度）。
 
     Args:
-        sentiment_series: Daily average sentiment in [-1, 1]
-        buzz_series: Daily message-volume series
-        lookback: Historical window in days used for percentile ranking
+        sentiment_series: 日均情绪分 [-1, 1]
+        buzz_series: 日帖子量序列
+        lookback: 百分位排名历史窗口（天）
 
     Returns:
-        Fear-and-greed index in [0, 100]
-        0-20: extreme fear
-        20-40: fear
-        40-60: neutral
-        60-80: greed
-        80-100: extreme greed
-
-    Note:
-        Extreme greed (>80) is often a short-term top signal.
-        Extreme fear (<20) is often a short-term bottom signal.
+        恐贪指数 [0, 100]
+        0-20 极度恐惧 / 20-40 恐惧 / 40-60 中性 / 60-80 贪婪 / 80-100 极度贪婪
     """
-    # Normalize sentiment by percentile rank.
     sentiment_rank = sentiment_series.rolling(lookback).rank(pct=True) * 100
-
-    # Normalize buzz by percentile rank.
     buzz_rank = buzz_series.rolling(lookback).rank(pct=True) * 100
-
-    # Weighted combination: 60% sentiment + 40% buzz.
     fear_greed = 0.6 * sentiment_rank + 0.4 * buzz_rank
-
     return fear_greed.clip(0, 100)
 ```
 
-**Extreme-sentiment thresholds**
+**极值阈值**：
+| 区间 | 状态 | 历史含义 | 交易解读 |
+|------|------|---------|---------|
+| 0-20 | 极度恐惧 | 恐慌抛售、流动性压力 | 逆向做多候选 |
+| 20-40 | 恐惧 | 悲观蔓延 | 观望企稳 |
+| 40-60 | 中性 | 情绪均衡 | 让基本面主导 |
+| 60-80 | 贪婪 | 乐观主导 | 减仓候选 |
+| 80-100 | 极度贪婪 | FOMO散户涌入 | 逆向做空候选 |
 
-| Range | State | Historical Meaning | Trading Interpretation |
-|---------|-----|---------|---------|
-| 0-20 | Extreme fear | Panic selling, liquidity stress | Contrarian long candidate |
-| 20-40 | Fear | Pessimism spreading | Wait and watch for stabilization |
-| 40-60 | Neutral | Balanced sentiment | Let fundamentals lead |
-| 60-80 | Greed | Optimism dominant | Candidate for trimming risk |
-| 80-100 | Extreme greed | FOMO-driven retail influx | Contrarian short candidate |
-
----
-
-### 3.4 Retail vs Institutional Sentiment
+### 3.4 散户 vs 机构情绪
 
 ```python
 def classify_author_type(author: dict) -> str:
-    """Classify an account as retail / institutional / KOL using profile traits.
+    """根据资料特征分类账号为散户/机构/KOL。
 
     Args:
-        author: Dict containing followers_count / verified / account_age_days /
-                tweet_count / following_count
+        author: 含 followers_count / verified / account_age_days / post_count
 
     Returns:
-        'institutional': institutional account
-        'kol': high-impact KOL
-        'retail': retail user
-        'bot_risk': suspected bot
-
-    Note:
-        Institutional sentiment should carry more weight than KOL,
-        and KOL more than retail. Retail extremes often have contrarian value.
+        'institutional' / 'kol' / 'retail' / 'bot_risk'
     """
     followers = author.get("followers_count", 0)
     verified = author.get("verified", False)
     age_days = author.get("account_age_days", 0)
-    tweet_count = author.get("tweet_count", 0)
+    post_count = author.get("post_count", 0)
 
-    # Bot-risk detection
-    if age_days < 30 and tweet_count > 1000:
+    if age_days < 30 and post_count > 1000:
         return "bot_risk"
-    if tweet_count > 0 and (tweet_count / max(age_days, 1)) > 50:
+    if post_count > 0 and (post_count / max(age_days, 1)) > 50:
         return "bot_risk"
-
-    # Institutional characteristics: verified plus large audience
     if verified and followers > 100_000:
         return "institutional"
-
-    # KOL: large following but not necessarily verified
     if followers > 10_000:
         return "kol"
-
     return "retail"
 
 
-def weighted_sentiment(
-    df: pd.DataFrame,
-    weights: dict | None = None,
-) -> pd.Series:
-    """Compute weighted sentiment by author category.
+def weighted_sentiment(df: pd.DataFrame, weights: dict | None = None) -> pd.Series:
+    """按作者类别加权情绪。
 
     Args:
-        df: DataFrame containing sentiment_score / author_type / timestamp
-        weights: Optional category weights, defaults to institutional:3, kol:2, retail:1
+        df: 含 sentiment_score / author_type / timestamp
+        weights: 类别权重，默认 institutional:3, kol:2, retail:1
 
     Returns:
-        Daily weighted sentiment time series
+        日度加权情绪时序
     """
     if weights is None:
         weights = {"institutional": 3.0, "kol": 2.0, "retail": 1.0, "bot_risk": 0.0}
@@ -690,34 +334,27 @@ def weighted_sentiment(
 
 ---
 
-## 4. Using Social Signals as Factors
+## 4. 社媒信号作为因子
 
-### 4.1 Social-Sentiment Factor Construction and IC / ICIR Testing
+### 4.1 情绪因子构建与 IC/ICIR 检验
 
 ```python
-import pandas as pd
-import numpy as np
 from scipy.stats import spearmanr
 
-def compute_ic(
-    factor_series: pd.Series,
-    forward_return: pd.Series,
-    method: str = "spearman",
-) -> float:
-    """Compute one-period factor IC (information coefficient).
+def compute_ic(factor_series: pd.Series, forward_return: pd.Series, method: str = "spearman") -> float:
+    """计算单期因子IC。
 
     Args:
-        factor_series: Cross-sectional factor values, e.g. same-day sentiment by ticker
-        forward_return: Matching forward N-day returns
-        method: "spearman" for rank correlation or "pearson"
+        factor_series: 截面因子值（如同日情绪分）
+        forward_return: 对应前向N日收益
+        method: "spearman" 或 "pearson"
 
     Returns:
-        IC in [-1, 1]. |IC| > 0.05 is useful and > 0.1 is strong.
+        IC [-1, 1]。|IC| > 0.05 有用，> 0.1 强。
     """
     aligned = pd.concat([factor_series, forward_return], axis=1).dropna()
     if len(aligned) < 5:
         return np.nan
-
     if method == "spearman":
         ic, _ = spearmanr(aligned.iloc[:, 0], aligned.iloc[:, 1])
     else:
@@ -726,136 +363,68 @@ def compute_ic(
 
 
 def compute_icir(ic_series: pd.Series) -> float:
-    """Compute ICIR, the information ratio of IC.
-
-    Args:
-        ic_series: Time series of IC values
-
-    Returns:
-        ICIR = mean(IC) / std(IC), where > 0.5 is useful and > 1.0 is strong
-    """
+    """计算ICIR = mean(IC)/std(IC)。> 0.5 有用，> 1.0 强。"""
     return ic_series.mean() / ic_series.std() if ic_series.std() > 0 else np.nan
-
-
-# Example factor-construction workflow
-def build_sentiment_factor(
-    raw_data: pd.DataFrame,
-    forward_days: int = 5,
-) -> dict:
-    """Build a complete social-sentiment factor and test its effectiveness.
-
-    Args:
-        raw_data: Raw data containing date / ticker / sentiment_score / author_type
-        forward_days: Forward return horizon in days
-
-    Returns:
-        {'factor': DataFrame, 'ic_series': Series, 'icir': float}
-    """
-    # 1. Cross-sectional standardization
-    factor = (
-        raw_data.groupby("date")["sentiment_score"]
-        .transform(lambda x: (x - x.mean()) / (x.std() + 1e-8))
-    )
-
-    # 2. Compute period-by-period IC
-    ic_list = []
-    dates = raw_data["date"].unique()
-    for date in sorted(dates)[:-forward_days]:
-        fwd_date = dates[dates > date][:forward_days][-1]
-        f = raw_data[raw_data["date"] == date].set_index("ticker")["sentiment_norm"]
-        r = raw_data[raw_data["date"] == fwd_date].set_index("ticker")["return"]
-        ic_list.append((date, compute_ic(f, r)))
-
-    ic_series = pd.Series(dict(ic_list))
-    return {
-        "factor": factor,
-        "ic_series": ic_series,
-        "ic_mean": ic_series.mean(),
-        "icir": compute_icir(ic_series),
-    }
 ```
 
-**IC / ICIR grading**
-
-| Metric | Weak | Useful | Strong |
-|-----|----|----|---|
+**IC/ICIR 评级**：
+| 指标 | 弱 | 有用 | 强 |
+|------|----|----|---|
 | \|IC\| | < 0.03 | 0.03-0.08 | > 0.08 |
 | ICIR | < 0.3 | 0.3-0.8 | > 0.8 |
-| IC positive-rate | < 50% | 50-60% | > 60% |
+| IC正率 | < 50% | 50-60% | > 60% |
 
----
-
-### 4.2 Orthogonalization Against Traditional Factors
+### 4.2 对传统因子正交化
 
 ```python
-def orthogonalize_sentiment(
-    sentiment_factor: pd.Series,
-    traditional_factors: pd.DataFrame,
-) -> pd.Series:
-    """Orthogonalize the sentiment factor against traditional factors.
+def orthogonalize_sentiment(sentiment_factor: pd.Series, traditional_factors: pd.DataFrame) -> pd.Series:
+    """对传统因子正交化情绪因子，保留纯情绪残差。
 
     Args:
-        sentiment_factor: Raw sentiment factor after cross-sectional normalization
-        traditional_factors: Matrix of traditional factors such as size / momentum / valuation
+        sentiment_factor: 截面标准化后的情绪因子
+        traditional_factors: 传统因子矩阵（规模/动量/估值）
 
     Returns:
-        Pure sentiment factor after removing shared components, i.e. the residual
-
-    Note:
-        Orthogonalization often lowers IC, but improves factor independence
-        and reduces double-counting in multi-factor portfolios.
+        去除共同成分后的纯情绪因子（残差）
     """
     from sklearn.linear_model import LinearRegression
-    import numpy as np
-
-    # Regress on the traditional factors and keep the residual.
     X = traditional_factors.fillna(0).values
     y = sentiment_factor.fillna(0).values
-
     reg = LinearRegression(fit_intercept=True).fit(X, y)
     residual = y - reg.predict(X)
-
     return pd.Series(residual, index=sentiment_factor.index)
 ```
 
----
-
-### 4.3 Cross-Platform Sentiment Aggregation Weights
+### 4.3 跨平台情绪聚合权重
 
 ```python
 PLATFORM_WEIGHTS = {
-    # Weight basis: historical IC contribution + information quality
-    "twitter_institutional": 0.35,
-    "twitter_kol": 0.20,
-    "telegram_signal": 0.15,
-    "telegram_research": 0.15,
-    "discord_community": 0.10,
-    "reddit_wsb": 0.05,
+    # 权重依据：历史IC贡献 + 信息质量
+    "guba": 0.45,        # 散户情绪温度计，覆盖最广
+    "xueqiu": 0.30,      # 偏价值/趋势投资者，KOL多
+    "weibo": 0.15,       # 事件脉冲，噪音大
+    "forum": 0.10,       # 短线游资，题材热度
 }
 
 def aggregate_platform_sentiment(platform_scores: dict[str, float]) -> float:
-    """Aggregate sentiment scores from multiple platforms using weights.
+    """多平台情绪加权聚合。
 
     Args:
-        platform_scores: Dict of {platform_key: sentiment_score} with scores in [-1, 1]
+        platform_scores: {platform_key: sentiment_score}，score in [-1, 1]
 
     Returns:
-        Aggregated sentiment score in [-1, 1]
+        聚合情绪分 [-1, 1]
     """
     total_weight = 0.0
     weighted_sum = 0.0
-
     for platform, score in platform_scores.items():
         weight = PLATFORM_WEIGHTS.get(platform, 0.05)
         weighted_sum += score * weight
         total_weight += weight
-
     return weighted_sum / total_weight if total_weight > 0 else 0.0
 ```
 
----
-
-### 4.4 Sentiment-Reversal Signals
+### 4.4 情绪反转信号
 
 ```python
 def detect_sentiment_reversal(
@@ -865,25 +434,20 @@ def detect_sentiment_reversal(
     fear_threshold: float = 20.0,
     confirmation_days: int = 3,
 ) -> pd.DataFrame:
-    """Detect reversal signals from sentiment extremes.
+    """从情绪极值检测反转信号。
 
     Args:
-        fg_index: Fear-and-greed index in [0, 100]
-        price_series: Corresponding price series
-        extreme_threshold: Extreme-greed threshold, default 80
-        fear_threshold: Extreme-fear threshold, default 20
-        confirmation_days: Number of days required for confirmation
+        fg_index: 恐贪指数 [0, 100]
+        price_series: 对应价格序列
+        extreme_threshold: 极度贪婪阈值，默认80
+        fear_threshold: 极度恐惧阈值，默认20
+        confirmation_days: 确认天数
 
     Returns:
-        DataFrame containing signal / direction / strength
-        signal = 1: short signal due to sustained extreme greed
-        signal = -1: long signal due to sustained extreme fear
-        signal = 0: no signal
+        DataFrame：signal(1=做空/-1=做多/0=无) / direction / strength
 
     Note:
-        Sentiment reversals usually lag the exact top or bottom,
-        but can still lead by roughly 3-10 trading days.
-        Use together with price momentum or volume anomalies.
+        情绪反转通常滞后精确顶底3-10个交易日，需配合价格动量/成交量异常。
     """
     signals = pd.DataFrame(index=fg_index.index)
     signals["fg"] = fg_index
@@ -891,13 +455,11 @@ def detect_sentiment_reversal(
     signals["direction"] = ""
     signals["strength"] = 0.0
 
-    # Sustained extreme greed → short signal
     greed_mask = (fg_index > extreme_threshold).rolling(confirmation_days).sum() == confirmation_days
     signals.loc[greed_mask, "signal"] = 1
     signals.loc[greed_mask, "direction"] = "short"
     signals.loc[greed_mask, "strength"] = (fg_index - extreme_threshold).clip(0) / 20
 
-    # Sustained extreme fear → long signal
     fear_mask = (fg_index < fear_threshold).rolling(confirmation_days).sum() == confirmation_days
     signals.loc[fear_mask, "signal"] = -1
     signals.loc[fear_mask, "direction"] = "long"
@@ -908,388 +470,198 @@ def detect_sentiment_reversal(
 
 ---
 
-## 5. Platform-Specific Analysis
+## 5. 平台专项分析
 
-### 5.1 Twitter: KOL Influence Tracking + Earnings Sentiment
+### 5.1 股吧：散户情绪温度计 + 龙虎情绪
 
-**KOL influence quantification**
+**热度异常检测**
 
 ```python
-def compute_kol_influence_score(author: dict, recent_tweets: list[dict]) -> float:
-    """Quantify the market influence of a Twitter KOL.
+def detect_guba_heat_anomaly(posts: list[dict], baseline: float) -> dict:
+    """检测股吧热度异常。
 
     Args:
-        author: Account metadata including follower count, verification, and age
-        recent_tweets: Most recent 20 tweets including engagement metrics
+        posts: get_a_share_social_sentiment 返回的帖子列表
+        baseline: 历史日均帖子数
 
     Returns:
-        Influence score in [0, 100]
-
-    Note:
-        KOLs with scores above 70 tend to lift 1-hour realized volatility
-        of the related asset by roughly 15% after posting.
+        {'heat_zscore': float, 'is_anomaly': bool, 'read_total': int}
     """
-    # Follower-quality score, using log follower count
-    follower_score = min(np.log10(max(author["followers_count"], 1)) / 7, 1.0) * 40
-
-    # Engagement rate = recent average engagement / follower count
-    avg_engagement = np.mean([
-        t["metrics"]["like_count"] + t["metrics"]["retweet_count"] * 2
-        for t in recent_tweets
-    ])
-    engagement_rate = avg_engagement / max(author["followers_count"], 1)
-    engagement_score = min(engagement_rate * 1000, 1.0) * 30
-
-    # Account-age credibility score
-    age_score = min(author["account_age_days"] / 1825, 1.0) * 20  # full score at 5 years
-
-    # Verification bonus
-    verified_bonus = 10 if author["verified"] else 0
-
-    return follower_score + engagement_score + age_score + verified_bonus
+    read_total = sum(p.get("read_count") or 0 for p in posts)
+    msg_count = len(posts)
+    # 简化z-score：实际需历史序列
+    heat_zscore = (msg_count - baseline) / max(baseline, 1) if baseline > 0 else 0
+    return {
+        "heat_zscore": heat_zscore,
+        "is_anomaly": heat_zscore > 2.0,
+        "read_total": read_total,
+    }
 ```
 
-**Pre/post-earnings sentiment shift**
+**看多比例**
 
 ```python
-def analyze_earnings_sentiment_shift(
-    ticker: str,
-    earnings_date: str,
-    sentiment_df: pd.DataFrame,
-    window_days: int = 5,
-) -> dict:
-    """Analyze Twitter sentiment changes before and after earnings.
+def compute_bull_ratio(scored_posts: list[dict]) -> float:
+    """计算看多比例（需先LLM打分）。
 
     Args:
-        ticker: Stock ticker
-        earnings_date: Earnings date in YYYY-MM-DD
-        sentiment_df: Daily time series containing date / sentiment_score
-        window_days: Observation window on each side of the earnings date
+        scored_posts: 已打分的帖子列表，含 sentiment_score
 
     Returns:
-        {
-          'pre_sentiment': float,
-          'post_sentiment': float,
-          'shift': float,
-          'signal': str  # 'beat_expected' / 'miss_expected' / 'neutral'
-        }
+        看多比例 [0, 1]。> 0.8 极度乐观（警惕）。
     """
-    ed = pd.Timestamp(earnings_date)
-    pre = sentiment_df[
-        (sentiment_df.index >= ed - pd.Timedelta(days=window_days)) &
-        (sentiment_df.index < ed)
-    ]["sentiment_score"].mean()
-    post = sentiment_df[
-        (sentiment_df.index > ed) &
-        (sentiment_df.index <= ed + pd.Timedelta(days=window_days))
-    ]["sentiment_score"].mean()
+    if not scored_posts:
+        return 0.0
+    bull = sum(1 for p in scored_posts if p.get("sentiment_score", 0) > 0.1)
+    return bull / len(scored_posts)
+```
 
-    shift = post - pre
-    signal = "neutral"
-    if shift > 0.2:
-        signal = "beat_expected"
-    elif shift < -0.2:
-        signal = "miss_expected"
+### 5.2 雪球：KOL一致性 + 机构观点扩散
 
-    return {"pre_sentiment": pre, "post_sentiment": post, "shift": shift, "signal": signal}
+**KOL一致性量化**
+
+```python
+def compute_kol_consensus(scored_posts: list[dict]) -> dict:
+    """量化雪球KOL观点一致性。
+
+    Args:
+        scored_posts: 已打分且标注author_type的帖子
+
+    Returns:
+        {'consensus_score': float[-1,1], 'kol_count': int, 'agreement': float}
+    """
+    kol_posts = [p for p in scored_posts if p.get("author_type") == "kol"]
+    if not kol_posts:
+        return {"consensus_score": 0.0, "kol_count": 0, "agreement": 0.0}
+    scores = [p["sentiment_score"] for p in kol_posts]
+    avg = np.mean(scores)
+    agreement = sum(1 for s in scores if (s > 0) == (avg > 0)) / len(scores)
+    return {
+        "consensus_score": avg,
+        "kol_count": len(kol_posts),
+        "agreement": agreement,
+    }
+```
+
+### 5.3 微博：事件脉冲 + 传播速度
+
+**事件情绪脉冲**
+
+```python
+def detect_weibo_pulse(posts: list[dict], window_minutes: int = 30) -> dict:
+    """检测微博事件情绪脉冲。
+
+    Args:
+        posts: 微博帖子列表，含 timestamp / repost_count
+        window_minutes: 脉冲检测窗口
+
+    Returns:
+        {'is_pulse': bool, 'peak_reposts': int, 'sentiment_shift': float}
+    """
+    if not posts:
+        return {"is_pulse": False, "peak_reposts": 0, "sentiment_shift": 0.0}
+    reposts = [p.get("repost_count", 0) for p in posts]
+    peak = max(reposts)
+    median = np.median(reposts)
+    is_pulse = peak > median * 5 and peak > 100
+    return {
+        "is_pulse": is_pulse,
+        "peak_reposts": peak,
+        "sentiment_shift": 0.0,  # 需时序打分计算
+    }
 ```
 
 ---
 
-### 5.2 Telegram: Crypto Project Alpha + Airdrop / IDO Buzz
+## 6. 数据 schema 与存储
 
-**Alpha-signal quality filter**
-
-Signal quality varies widely across crypto Telegram channels. Filter with rules like the following:
+### 6.1 统一采集接口
 
 ```python
-ALPHA_QUALITY_RULES = {
-    # Low-quality signals to filter out directly
-    "spam_patterns": [
-        r"100x guaranteed",
-        r"private sale",
-        r"limited spots",
-        r"DM me",
-        r"pump incoming",
-    ],
-    # High-quality signals that deserve extra weight
-    "quality_signals": [
-        r"on-chain data",
-        r"tokenomics analysis",
-        r"team background",
-        r"audit report",
-        r"TVL growing",
-    ],
-}
-
-def score_telegram_alpha(message: str) -> dict:
-    """Score the quality of alpha in Telegram crypto-channel messages.
-
-    Args:
-        message: Raw channel message
-
-    Returns:
-        {'quality_score': int[0-10], 'is_spam': bool, 'alpha_type': str}
-    """
-    import re
-    text_lower = message.lower()
-
-    # Spam detection
-    for pattern in ALPHA_QUALITY_RULES["spam_patterns"]:
-        if re.search(pattern, text_lower):
-            return {"quality_score": 0, "is_spam": True, "alpha_type": "spam"}
-
-    # Quality score
-    score = 5
-    for pattern in ALPHA_QUALITY_RULES["quality_signals"]:
-        if re.search(pattern, text_lower):
-            score += 1
-
-    alpha_type = "research" if score >= 7 else "signal" if score >= 5 else "noise"
-    return {"quality_score": min(score, 10), "is_spam": False, "alpha_type": alpha_type}
-```
-
-**Airdrop / IDO buzz tracking**
-
-- Monitor keyword frequency for tags such as `#airdrop`, `#IDO`, and `#whitelist`
-- Buzz peaks where topic frequency exceeds 3× baseline often lead token-price moves by 2-5 days
-- Important caveat: high-buzz IDOs often face heavy Day-1 sell pressure from participants taking quick profits
-
----
-
-### 5.3 Discord: Community Activity → Project Health
-
-**Project health index**
-
-```python
-def compute_project_health_index(
-    discord_stats: dict,
-    lookback_days: int = 30,
-) -> dict:
-    """Build a project-community health index from Discord statistics.
-
-    Args:
-        discord_stats: {
-            'daily_messages': list[int],
-            'daily_active_users': list[int],
-            'new_members': list[int],
-            'dev_commits': list[int],
-        }
-        lookback_days: Historical window used as the baseline
-
-    Returns:
-        {
-            'health_score': float[0-100],
-            'trend': 'growing'|'stable'|'declining',
-            'flags': list[str]
-        }
-    """
-    msgs = np.array(discord_stats["daily_messages"][-lookback_days:])
-    users = np.array(discord_stats["daily_active_users"][-lookback_days:])
-    members = np.array(discord_stats["new_members"][-lookback_days:])
-
-    # Component scores
-    msg_trend = np.polyfit(range(len(msgs)), msgs, 1)[0]
-    user_trend = np.polyfit(range(len(users)), users, 1)[0]
-
-    msg_score = min(50 + msg_trend / max(msgs.mean(), 1) * 500, 100)
-    user_score = min(50 + user_trend / max(users.mean(), 1) * 500, 100)
-    retention = (users.mean() / max(members[-7:].sum(), 1)) * 20
-
-    health_score = 0.4 * msg_score + 0.4 * user_score + 0.2 * min(retention, 100)
-
-    # Warning flags
-    flags = []
-    if msgs[-7:].mean() < msgs[-30:].mean() * 0.5:
-        flags.append("Message volume has collapsed: 7-day average is below 50% of the 30-day average")
-    if users[-3:].mean() < users[-30:].mean() * 0.3:
-        flags.append("Active users have plunged: possible project-abandonment warning")
-
-    trend = "growing" if msg_trend > 0 and user_trend > 0 else \
-            "declining" if msg_trend < 0 and user_trend < 0 else "stable"
-
-    return {"health_score": health_score, "trend": trend, "flags": flags}
-```
-
-**Whale-discussion monitoring**
-
-- Monitor channels such as `#whale-watch` and `#large-transactions`
-- Keywords to watch: `whale alert`, `large transfer`, `moved X BTC`
-- Cross-check with Whale Alert Telegram bot data
-
----
-
-### 5.4 Reddit: WSB Meme-Stock Buzz + Options-Flow Abnormalities
-
-**Meme-stock momentum detection**
-
-```python
-def detect_meme_stock_momentum(
-    wsb_posts: list[dict],
-    top_n: int = 10,
-) -> pd.DataFrame:
-    """Detect meme-stock momentum on WSB and identify short-squeeze candidates.
-
-    Args:
-        wsb_posts: List of WSB posts collected through PRAW
-        top_n: Number of top hot tickers to return
-
-    Returns:
-        DataFrame containing ticker / mention_count / avg_score / option_buzz
-
-    Note:
-        mention_count > 200 in one day plus sentiment > 0.5 is one early short-squeeze warning condition.
-        A full squeeze setup still requires short interest above 20%.
-    """
-    import re
-    from collections import defaultdict
-
-    ticker_stats = defaultdict(lambda: {"count": 0, "scores": [], "option_buzz": 0})
-
-    # Common U.S. ticker regex: 2-5 uppercase letters
-    ticker_pattern = re.compile(r"\b([A-Z]{2,5})\b")
-    option_keywords = ["calls", "puts", "options", "IV", "yolo", "FDs"]
-
-    for post in wsb_posts:
-        text = f"{post['title']} {post['selftext']}"
-        tickers_found = ticker_pattern.findall(text)
-
-        # Filter common non-ticker words
-        stop_words = {"THE", "FOR", "AND", "BUT", "NOT", "ARE", "YOU", "ALL", "CAN"}
-        tickers_found = [t for t in tickers_found if t not in stop_words]
-
-        has_options = any(kw.lower() in text.lower() for kw in option_keywords)
-
-        for ticker in set(tickers_found):
-            ticker_stats[ticker]["count"] += 1
-            ticker_stats[ticker]["scores"].append(post["score"])
-            if has_options:
-                ticker_stats[ticker]["option_buzz"] += 1
-
-    rows = []
-    for ticker, stats in ticker_stats.items():
-        rows.append({
-            "ticker": ticker,
-            "mention_count": stats["count"],
-            "avg_score": np.mean(stats["scores"]),
-            "option_buzz": stats["option_buzz"],
-        })
-
-    df = pd.DataFrame(rows).sort_values("mention_count", ascending=False)
-    return df.head(top_n)
-```
-
-**WSB short-squeeze checklist**
-
-| Condition | Data Source | Threshold |
-|-----|---------|-----|
-| WSB mentions | Reddit PRAW | > 200 per day |
-| WSB options-discussion heat | Reddit PRAW | option_buzz > 30% |
-| Short interest (SI) | Finviz / IEX | > 20% |
-| Borrow tightness | Securities-lending data | CTB > 5% |
-| Unusual options open interest | Option-chain data | OI day-over-day change > 50% |
-
----
-
-## 6. Data-Pipeline Integration
-
-### 6.1 Unified Data Collection Interface
-
-```python
-# Reference implementation: agent/src/tools/social_media_tool.py
-
 from dataclasses import dataclass
 from enum import Enum
 
 class Platform(str, Enum):
-    TWITTER = "twitter"
-    TELEGRAM = "telegram"
-    DISCORD = "discord"
-    REDDIT = "reddit"
+    GUBA = "guba"
+    XUEQIU = "xueqiu"
+    WEIBO = "weibo"
+    FORUM = "forum"
 
 @dataclass
-class SocialMediaQuery:
-    """Social-media query parameters."""
+class ASocialMediaQuery:
+    """A股社媒查询参数。"""
     platform: Platform
-    query: str
-    limit: int = 100
-    start_time: str | None = None
+    code: str
+    limit: int = 50
     include_sentiment: bool = True
 
-def collect_social_signals(query: SocialMediaQuery) -> dict:
-    """Unified entrypoint for collecting social-media data.
+def collect_a_share_social_signals(query: ASocialMediaQuery) -> dict:
+    """A股社媒数据统一采集入口。
 
     Args:
-        query: Query parameters including platform, keyword, time window, and limit
+        query: 查询参数
 
     Returns:
-        Standardized JSON data containing platform / items / metadata
-
-    Raises:
-        ValueError: Unsupported platform or invalid parameters
-        RuntimeError: API call failed, with retry guidance attached
+        标准化JSON：platform / items / metadata
     """
     collectors = {
-        Platform.TWITTER: _collect_twitter,
-        Platform.TELEGRAM: _collect_telegram,
-        Platform.DISCORD: _collect_discord,
-        Platform.REDDIT: _collect_reddit,
+        Platform.GUBA: _collect_guba,      # get_a_share_social_sentiment
+        Platform.XUEQIU: _collect_xueqiu,  # read_url + 解析
+        Platform.WEIBO: _collect_weibo,   # read_url + 解析
     }
     collector = collectors.get(query.platform)
     if not collector:
         raise ValueError(f"Unsupported platform: {query.platform}")
-
     raw_data = collector(query)
-
     if query.include_sentiment:
-        raw_data = _enrich_with_sentiment(raw_data)
-
+        raw_data = _enrich_with_sentiment(raw_data)  # LLM打分
     return raw_data
 ```
 
-### 6.2 Environment Variables
-
-```bash
-# Add the following to .env
-TWITTER_BEARER_TOKEN=xxx
-TELEGRAM_API_ID=xxx
-TELEGRAM_API_HASH=xxx
-DISCORD_BOT_TOKEN=xxx
-REDDIT_CLIENT_ID=xxx
-REDDIT_CLIENT_SECRET=xxx
-
-# Sentiment model selection: vader / finbert / llm
-SENTIMENT_MODEL=finbert
-```
-
-### 6.3 Factor Storage Schema
+### 6.2 因子存储 schema
 
 ```sql
--- Social-sentiment factor table (DuckDB / SQLite)
-CREATE TABLE social_sentiment_factors (
+-- A股社媒情绪因子表（DuckDB / SQLite）
+CREATE TABLE a_share_social_sentiment_factors (
     date        DATE NOT NULL,
-    ticker      VARCHAR(20) NOT NULL,
-    platform    VARCHAR(20) NOT NULL,
-    sentiment   FLOAT,           -- [-1, 1]
-    buzz_zscore FLOAT,           -- Buzz Z-score
-    fear_greed  FLOAT,           -- [0, 100]
+    code        VARCHAR(20) NOT NULL,
+    platform    VARCHAR(20) NOT NULL,      -- guba / xueqiu / weibo / forum
+    sentiment   FLOAT,                     -- [-1, 1]
+    buzz_zscore FLOAT,                     -- 热度Z-score
+    fear_greed  FLOAT,                     -- [0, 100]
     msg_count   INTEGER,
-    author_type VARCHAR(20),     -- institutional / kol / retail
-    PRIMARY KEY (date, ticker, platform)
+    author_type VARCHAR(20),               -- institutional / kol / retail
+    PRIMARY KEY (date, code, platform)
 );
 ```
 
 ---
 
-## 7. Caveats and Limitations
+## 7. 注意事项与局限
 
-1. **Limited lead value**: Social sentiment usually has IC around 0.03-0.06 on broad indices. It works best as a supporting factor, not a primary one.
-2. **Manipulation risk**: Telegram and Discord signal channels in crypto contain many paid signal groups and pump rings. Source-quality scoring is mandatory.
-3. **Language bias**: VADER and FinBERT are mainly built for English. Chinese social platforms such as Xueqiu or Guba need separate model adaptation.
-4. **API cost control**: Twitter API v2 basic tier allows 500,000 tweets/month, and upgrading from $100 to $5000/month changes economics significantly. Budget collection volume explicitly.
-5. **Latency vs quality trade-off**: Real-time collection is noisier, while daily aggregation gives cleaner signals. Choose based on the strategy horizon.
-6. **Factor decay**: Social-sentiment factor effectiveness decays as more market participants exploit the same signal. Re-test IC regularly.
+1. **领先价值有限**：社媒情绪对宽指数IC约0.03-0.06，宜作辅助因子，非主因子。
+2. **操纵风险**：股吧/微博存在水军/营销号，需来源质量评分过滤。
+3. **语言适配**：VADER/FinBERT为英文模型，A股社媒为中文，须用LLM打分或中文词典。
+4. **API成本控制**：LLM打分每条约500 token，批量打分需预算控制，高频用词典兜底。
+5. **延迟vs质量**：实时采集噪音大，日聚合信号更干净，按策略周期选择。
+6. **因子衰减**：社媒情绪因子有效性随参与者增多而衰减，定期重测IC。
+7. **股吧端点稳定性**：股吧JSON端点历史变动，本技能采用HTML列表页（最稳定入口），解析逻辑需随页面改版维护。
 
 ---
 
-*Version: v1.0 | Created: 2026-03-29 | Scope: quantitative research / factor mining (not for direct live-trading signals)*
+## 附录：海外平台（多市场扩展参考，非A股默认）
+
+> 以下平台为多市场扩展参考，**非A股默认数据源**。A股分析以股吧/雪球/微博为主。
+
+| 平台 | 适用市场 | 采集方式 | 备注 |
+|------|---------|---------|------|
+| Twitter/X | 美股/加密 | 官方API v2（付费）或 ntscraper | FinTwit生态，$TICKER cashtag |
+| Reddit | 美股/加密 | PRAW（免费API） | r/wallstreetbets meme股热度 |
+| Telegram | 加密 | Telethon（MTProto） | 信号频道/研究推送/巨鲸警报 |
+| Discord | 加密/量化 | discord.py（Bot API） | 项目社区健康度 |
+
+海外平台情绪量化可用 VADER（英文短帖）/ FinBERT（财经文本）/ LLM（长复杂文本），详见历史版本。
+
+---
+
+*Version: v2.0 | Updated: 2026-07-28 | Scope: A股情绪驱动策略研究（非直接实盘信号）*

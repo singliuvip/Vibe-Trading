@@ -25,7 +25,7 @@ import logging
 import re
 from typing import Any
 
-from backtest.loaders._http import resolve_min_interval, throttled_get_json
+from backtest.loaders._http import resolve_min_interval, throttled_get_text, throttled_get_json
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,35 @@ def get_json(url: str, *, params: dict[str, Any]) -> Any:
         ValueError: Body is not valid JSON.
     """
     return throttled_get_json(
+        url,
+        host_key=_HOST_KEY,
+        min_interval=_min_interval(),
+        params=params,
+    )
+
+
+def get_text(url: str, *, params: dict[str, Any] | None = None) -> str:
+    """Issue a throttled Eastmoney GET and return the raw text body.
+
+    Some Eastmoney surfaces (notably the Guba post-list HTML pages) do not
+    expose a stable JSON endpoint, so the body must be fetched as text and
+    parsed by the caller. This helper routes that request through the same
+    per-host throttle and session reuse as :func:`get_json` so the IP-ban
+    risk is identical and centrally controlled.
+
+    Args:
+        url: Fully-qualified Eastmoney endpoint URL.
+        params: Optional query parameters for the request.
+
+    Returns:
+        The response body as a decoded string.
+
+    Raises:
+        requests.RequestException: Network failure, propagated for the caller's
+            retry policy.
+        requests.HTTPError: Non-2xx response status.
+    """
+    return throttled_get_text(
         url,
         host_key=_HOST_KEY,
         min_interval=_min_interval(),

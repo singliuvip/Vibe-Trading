@@ -177,3 +177,32 @@ def throttled_get_json(
     )
     response.raise_for_status()
     return response.json()
+
+
+def throttled_get_text(
+    url: str,
+    *,
+    host_key: str,
+    min_interval: float,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 15.0,
+) -> str:
+    """Throttled GET that returns the raw response body as text.
+
+    Same contract as :func:`throttled_get`, plus ``response.raise_for_status()``
+    and ``response.text``. Intended for providers that expose only HTML (e.g.
+    Eastmoney Guba list pages) where no stable JSON endpoint exists. A non-2xx
+    status raises, which the caller's bounded-retry wrapper treats as
+    transient.
+    """
+    response = throttled_get(
+        url,
+        host_key=host_key,
+        min_interval=min_interval,
+        params=params,
+        headers=headers,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.text

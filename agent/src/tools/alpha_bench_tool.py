@@ -50,8 +50,8 @@ logger = logging.getLogger(__name__)
 # for the survivorship-bias warning in the bench summary's ``meta`` block).
 _SP500_CONSTITUENT_SOURCE_DATE = "2026-05-17"
 
-# Concurrent Tushare ``pro.daily`` fetches when building CSI300. Free tier
-# allows ~200 calls/min; 4 workers stays well under that with a 300-name list.
+# Concurrent Tushare ``pro.daily`` fetches when building CSI300. 4 workers
+# stays well under the rate limit with a 300-name list.
 _CSI300_FETCH_WORKERS = 4
 
 
@@ -343,8 +343,8 @@ def _load_csi300_panel(start: str, end: str) -> dict[str, pd.DataFrame]:
         logger.warning("csi300: using %d-name fallback (degraded run)", len(codes))
 
     # Fetch raw daily in parallel — we need ``amount`` which the standard
-    # loader drops. Tushare's free tier permits ~200 calls/min so 4 concurrent
-    # workers is comfortably under the rate limit even for a full 300-name list.
+    # loader drops. 4 concurrent workers is comfortably under the rate limit
+    # even for a full 300-name list.
     def _fetch_one(code: str) -> tuple[str, pd.DataFrame | None]:
         df = _retry(lambda: pro.daily(ts_code=code, start_date=sd, end_date=ed))
         if df is None or df.empty:

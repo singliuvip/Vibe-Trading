@@ -3,7 +3,7 @@
 Supports ``interval``: 1D (default) / 1W / 1M / 1m / 5m / 15m / 30m / 1H.
 Weekly/monthly uses ``pro.weekly()`` / ``pro.monthly()`` or
 ``pro.index_weekly()`` / ``pro.index_monthly()`` for indices.
-Minute data uses ``pro.stk_mins()`` (Tushare points >= 2000).
+Minute data uses ``pro.stk_mins()``.
 """
 
 import logging
@@ -279,7 +279,7 @@ class DataLoader:
             try:
                 df = self.api.stk_mins(ts_code=code, freq=freq, start_date=sd, end_date=ed)
                 if df is None or df.empty:
-                    logger.warning("empty Tushare minute data: %s (points >= 2000 required)", code)
+                    logger.warning("empty Tushare minute data: %s", code)
                     continue
                 df = df.sort_values("trade_time")
                 df["trade_date"] = pd.to_datetime(df["trade_time"])

@@ -3,10 +3,10 @@ services:
     build:
       context: .
       args:
-        # Default to Tsinghua mirrors for faster downloads in China.
+        # Default to Aliyun mirrors for faster downloads in China.
         # Override via env or --build-arg when behind a different mirror.
-        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-mirrors.tuna.tsinghua.edu.cn}
-        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-mirrors.aliyun.com}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
         PIP_DEFAULT_TIMEOUT: ${PIP_DEFAULT_TIMEOUT:-120}
     ports:
       - "127.0.0.1:8899:8899"

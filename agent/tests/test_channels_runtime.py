@@ -31,10 +31,11 @@ from src.utils.media_decode import FileSizeExceeded, save_base64_data_url
 class FakeSessionService:
     """Small SessionService stand-in for channel runtime tests."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, auto_reply: bool = True) -> None:
         self.created: list[Session] = []
         self.sent: list[tuple[str, str]] = []
         self.messages: dict[str, list[Message]] = {}
+        self.auto_reply = auto_reply
 
     def create_session(self, title: str = "", config: dict[str, Any] | None = None) -> Session:
         session = Session(session_id=f"session-{len(self.created) + 1}", title=title, config=config or {})
@@ -56,14 +57,15 @@ class FakeSessionService:
         del include_shell_tools, parent_attempt_id
         self.sent.append((session_id, content))
         attempt_id = f"attempt-{len(self.sent)}"
-        self.messages[session_id].append(
-            Message(
-                session_id=session_id,
-                role="assistant",
-                content=f"agent reply: {content}",
-                linked_attempt_id=attempt_id,
+        if self.auto_reply:
+            self.messages[session_id].append(
+                Message(
+                    session_id=session_id,
+                    role="assistant",
+                    content=f"agent reply: {content}",
+                    linked_attempt_id=attempt_id,
+                )
             )
-        )
         return {"message_id": "msg-1", "attempt_id": attempt_id}
 
     def get_messages(self, session_id: str, limit: int = 100) -> list[Message]:
@@ -283,6 +285,59 @@ def test_channel_runtime_routes_inbound_to_session_and_outbound(tmp_path: Path) 
                 "session_id": "session-1",
             },
         )
+
+    asyncio.run(scenario())
+
+
+def test_channel_runtime_returns_processing_hint_on_timeout_not_stale_reply(
+    tmp_path: Path,
+) -> None:
+    """A timed-out reply wait returns the processing hint, never a stale reply."""
+
+    async def scenario() -> None:
+        from src.channels.runtime import ChannelRuntime
+
+        bus = MessageBus()
+        service = FakeSessionService()
+        runtime = ChannelRuntime(
+            bus=bus,
+            session_service=service,
+            manager=None,
+            session_map_path=tmp_path / "channel_sessions.json",
+            reply_timeout_s=0.1,
+            poll_interval_s=0.01,
+        )
+        await runtime.start(start_manager=False)
+        try:
+            # Round 1: the fake session replies immediately -> historical reply.
+            await bus.publish_inbound(
+                InboundMessage(
+                    channel="websocket",
+                    sender_id="user-1",
+                    chat_id="chat-1",
+                    content="first message",
+                )
+            )
+            first = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+            assert first.content == "agent reply: first message"
+
+            # Round 2: no assistant reply is appended -> wait times out.
+            service.auto_reply = False
+            await bus.publish_inbound(
+                InboundMessage(
+                    channel="websocket",
+                    sender_id="user-1",
+                    chat_id="chat-1",
+                    content="second message",
+                )
+            )
+            outbound = await asyncio.wait_for(bus.consume_outbound(), timeout=2)
+        finally:
+            await runtime.stop()
+
+        assert "处理中" in outbound.content or "⏳" in outbound.content
+        assert outbound.content != "agent reply: first message"
+        assert outbound.metadata["attempt_id"] == "attempt-2"
 
     asyncio.run(scenario())
 

@@ -61,7 +61,7 @@ def test_channels_status_reports_all_configured_adapters(tmp_path: Path, monkeyp
     assert "reply_timeout_s" not in payload["channels"]
     assert "send_max_retries" not in payload["channels"]
     assert api_server._channel_runtime is not None
-    assert api_server._channel_runtime.config.reply_timeout_s == 600.0
+    assert api_server._channel_runtime.config.reply_timeout_s == 900.0
 
 
 def test_channels_runtime_uses_configured_reply_timeout(tmp_path: Path, monkeypatch) -> None:

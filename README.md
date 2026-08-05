@@ -765,12 +765,12 @@ vibe-trading alpha bench --zoo gtja191 --universe csi300 --period 2018-2025 --to
 
 IM channel adapters connect outside chat apps to the same session runtime used by the Web UI and CLI. Configure enabled adapters under `channels` in `~/.vibe-trading/agent.json`; SDK-backed adapters are optional extras, and missing SDKs report recovery hints instead of crashing the runtime.
 
-For long-running channel tasks, tune the central assistant-reply wait budget with `replyTimeoutS` (seconds, default `600`):
+For long-running channel tasks, tune the central assistant-reply wait budget with `replyTimeoutS` (seconds, default `900`):
 
 ```json
 {
   "channels": {
-    "replyTimeoutS": 1800,
+    "replyTimeoutS": 900,
     "feishu": {
       "enabled": true
     }

@@ -35,6 +35,11 @@ if TYPE_CHECKING:
 FEISHU_AVAILABLE = importlib.util.find_spec("lark_oapi") is not None
 _LOGIN_CONSOLE = Console()
 
+# Serializes patch/restore of the module-level ``lark_oapi.ws.client.loop`` global
+# that every WebSocket thread shares. Without this, a winding-down thread could
+# close an event loop another thread is still using (silent message loss).
+_LARK_WS_LOOP_LOCK = threading.Lock()
+
 
 def _load_lark_runtime() -> tuple[Any, str, str]:
     """Import the heavy Feishu SDK lazily.
@@ -53,14 +58,15 @@ def _load_lark_runtime() -> tuple[Any, str, str]:
         not ws_client_already_imported
         and threading.current_thread() is not threading.main_thread()
     ):
-        import_loop = getattr(lark_ws_client, "loop", None)
-        if (
-            import_loop is not None
-            and not import_loop.is_running()
-            and not import_loop.is_closed()
-        ):
-            import_loop.close()
-        lark_ws_client.loop = None
+        with _LARK_WS_LOOP_LOCK:
+            import_loop = getattr(lark_ws_client, "loop", None)
+            if (
+                import_loop is not None
+                and not import_loop.is_running()
+                and not import_loop.is_closed()
+            ):
+                import_loop.close()
+            lark_ws_client.loop = None
         with suppress(Exception):
             asyncio.set_event_loop(None)
 
@@ -582,6 +588,8 @@ class FeishuChannel(BaseChannel):
     display_name = "Feishu"
 
     _STREAM_EDIT_INTERVAL = 0.5  # throttle between CardKit streaming updates
+    _WS_STOP_TIMEOUT = 12.0  # seconds to wait for the WS thread to exit on stop()
+    _WS_WATCHDOG_SECONDS = 900.0  # receive_v1 stall threshold (seconds) for the watchdog
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
@@ -602,6 +610,11 @@ class FeishuChannel(BaseChannel):
         self._bot_open_id: str | None = None
         self._background_tasks: set[asyncio.Task] = set()
         self._reaction_ids: dict[str, str] = {}  # message_id → reaction_id
+        self._ws_stop_event = threading.Event()  # stop signal for the WS thread
+        self._ws_lifecycle_lock = threading.Lock()  # serializes start/stop lifecycle
+        self._ws_loop: asyncio.AbstractEventLoop | None = None  # WS thread's event loop
+        self._ws_last_receive_ts: float | None = None  # last receive_v1 timestamp
+        self._ws_last_watchdog_warn: float | None = None  # watchdog warn throttle
 
     # ------------------------------------------------------------------
     # QR login — writes credentials directly to config.json
@@ -685,12 +698,38 @@ class FeishuChannel(BaseChannel):
             )
             return
 
+        # --- Re-entry guard (fast path) ---
+        # Cheap check before the heavy SDK import: if a WS thread is already
+        # live, start() is a no-op. The authoritative re-check plus atomic
+        # thread spawn happens again below, under the lock, after the SDK load.
+        with self._ws_lifecycle_lock:
+            ws_thread = self._ws_thread
+            if self._running and ws_thread is not None and ws_thread.is_alive():
+                self.logger.info("feishu WS already running; start() is idempotent")
+                return
+
+        # Load the SDK first (heavy import) while no lifecycle lock is held.
+        # Holding the lock across this await would let a concurrent start()
+        # pass the guard, so the import runs before the atomic spawn section.
         lark, feishu_domain, lark_domain = await asyncio.to_thread(_load_lark_runtime)
 
         # (stdlib logging handles Lark SDK output via propagation)
 
-        self._running = True
+        # If a previous stop() didn't fully reap its WS thread (join timeout),
+        # signal and join it here (an await, so it must stay outside the lock)
+        # before the atomic spawn below can create a fresh thread.
+        with self._ws_lifecycle_lock:
+            ws_thread = self._ws_thread
+            stale_thread = (
+                ws_thread if (not self._running and ws_thread is not None and ws_thread.is_alive()) else None
+            )
+        if stale_thread is not None:
+            self._signal_ws_stop()
+            await asyncio.to_thread(stale_thread.join, self._WS_STOP_TIMEOUT)
+
         self._loop = asyncio.get_running_loop()
+        self._ws_last_receive_ts = time.monotonic()
+        self._ws_last_watchdog_warn = None
 
         # Create Lark client for sending messages
         domain = lark_domain if self.config.domain == "lark" else feishu_domain
@@ -753,28 +792,65 @@ class FeishuChannel(BaseChannel):
 
             import lark_oapi.ws.client as _lark_ws_client
 
-            previous_loop = getattr(_lark_ws_client, "loop", None)
             ws_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(ws_loop)
-            # Patch the module-level loop used by lark's ws Client.start()
-            _lark_ws_client.loop = ws_loop
+            # Patch the module-level loop used by lark's ws Client.start().
+            # Guarded by a module lock so a winding-down thread can never close
+            # an event loop another thread is still using (silent message loss).
+            with _LARK_WS_LOOP_LOCK:
+                previous_loop = getattr(_lark_ws_client, "loop", None)
+                _lark_ws_client.loop = ws_loop
+                self._ws_loop = ws_loop
             try:
-                while self._running:
+                while self._running and not self._ws_stop_event.is_set():
                     try:
                         self._ws_client.start()
                     except Exception as e:
-                        self.logger.warning("WebSocket error: {}", e)
-                    if self._running:
+                        if self._ws_stop_event.is_set() or not self._running:
+                            # Normal shutdown path: stop() breaks the blocking
+                            # run_until_complete(_select()) via loop.stop(),
+                            # which surfaces as a RuntimeError. Not a real
+                            # connection error, so keep it at debug level.
+                            self.logger.debug(
+                                "feishu WS closed during shutdown (normal): %s", e
+                            )
+                        else:
+                            self.logger.warning("WebSocket error: %s", e)
+                    if self._running and not self._ws_stop_event.is_set():
                         time.sleep(5)
             finally:
-                if getattr(_lark_ws_client, "loop", None) is ws_loop:
-                    _lark_ws_client.loop = previous_loop
+                with _LARK_WS_LOOP_LOCK:
+                    if getattr(_lark_ws_client, "loop", None) is ws_loop:
+                        _lark_ws_client.loop = previous_loop
+                    if self._ws_loop is ws_loop:
+                        self._ws_loop = None
                 with suppress(Exception):
                     asyncio.set_event_loop(None)
-                ws_loop.close()
+                with suppress(Exception):
+                    ws_loop.close()
 
-        self._ws_thread = threading.Thread(target=run_ws, daemon=True)
-        self._ws_thread.start()
+        # --- Atomic spawn ---
+        # Re-check state under the lock, then create and start the WS thread
+        # synchronously (no await while the lock is held). A concurrent start()
+        # may have spawned a thread while we built the clients, so this re-check
+        # is the authoritative one — only one thread can ever be spawned for a
+        # given lifecycle state (fixes the TOCTOU in the old guard).
+        with self._ws_lifecycle_lock:
+            ws_thread = self._ws_thread
+            already_running = self._running and ws_thread is not None and ws_thread.is_alive()
+            if already_running:
+                self.logger.info("feishu WS already running; start() is idempotent")
+                return
+            if ws_thread is not None and ws_thread.is_alive():
+                self.logger.error(
+                    "Previous feishu WS thread still alive after %.0fs; refusing to start a duplicate WS thread",
+                    self._WS_STOP_TIMEOUT,
+                )
+                return
+            self._running = True
+            self._ws_stop_event.clear()
+            self._ws_thread = threading.Thread(target=run_ws, daemon=True)
+            self._ws_thread.start()
 
         # Fetch bot's own open_id for accurate @mention matching
         self._bot_open_id = await asyncio.get_running_loop().run_in_executor(
@@ -788,19 +864,80 @@ class FeishuChannel(BaseChannel):
         self.logger.info("bot started with WebSocket long connection")
         self.logger.info("No public IP required - using WebSocket to receive events")
 
-        # Keep running until stopped
+        # Keep running until stopped; watchdog makes a stalled receive pipeline
+        # observable instead of silently dropping messages.
         while self._running:
+            self._check_ws_watchdog()
             await asyncio.sleep(1)
+
+    def _signal_ws_stop(self) -> None:
+        """Signal the WS thread to exit and break its blocking ``Client.start()``.
+
+        lark's ``Client.start()`` runs ``loop.run_until_complete(_select())``
+        which never returns on its own, so we stop the thread's dedicated event
+        loop from here; ``run_until_complete`` then raises ``RuntimeError`` and
+        the ``run_ws`` loop observes the stop event and exits.
+        """
+        self._ws_stop_event.set()
+        with _LARK_WS_LOOP_LOCK:
+            ws_loop = self._ws_loop
+        if ws_loop is None or ws_loop.is_closed():
+            return
+        try:
+            ws_loop.call_soon_threadsafe(ws_loop.stop)
+        except Exception:
+            self.logger.debug("failed to stop feishu ws event loop", exc_info=True)
+
+    def _check_ws_watchdog(self) -> None:
+        """Log when the WS connection stays up but receives no ``receive_v1``.
+
+        Called from the main keep-alive loop while the channel is running.
+        Warnings are throttled to one per stall period to avoid log spam.
+        """
+        last = self._ws_last_receive_ts
+        if last is None:
+            return
+        now = time.monotonic()
+        stale_for = now - last
+        if stale_for <= self._WS_WATCHDOG_SECONDS:
+            return
+        last_warn = self._ws_last_watchdog_warn
+        if last_warn is not None and now - last_warn < self._WS_WATCHDOG_SECONDS:
+            return
+        self._ws_last_watchdog_warn = now
+        self.logger.warning(
+            "feishu WS connection alive but no receive_v1 inbound for %.0fs "
+            "(threshold %.0fs); receiving pipeline may be stalled",
+            stale_for,
+            self._WS_WATCHDOG_SECONDS,
+        )
 
     async def stop(self) -> None:
         """
-        Stop the Feishu bot.
+        Stop the Feishu bot and terminate its WebSocket thread.
 
-        Notice: lark.ws.Client does not expose stop method， simply exiting the program will close the client.
-
-        Reference: https://github.com/larksuite/oapi-sdk-python/blob/v2_main/lark_oapi/ws/client.py#L86
+        lark.ws.Client.start() blocks the WS thread inside ``run_until_complete``
+        with no public close API (see lark_oapi/ws/client.py#L86), so we break
+        out by stopping the dedicated WS event loop, then join the thread (with
+        a timeout) so a subsequent start() can never spawn a second WS thread.
         """
         self._running = False
+        self._signal_ws_stop()
+
+        thread = self._ws_thread
+        if thread is not None and thread.is_alive():
+            await asyncio.to_thread(thread.join, self._WS_STOP_TIMEOUT)
+            if thread.is_alive():
+                self.logger.warning(
+                    "feishu WS thread did not exit within %.0fs; it will be reaped before the next start()",
+                    self._WS_STOP_TIMEOUT,
+                )
+            else:
+                with self._ws_lifecycle_lock:
+                    if self._ws_thread is thread:
+                        self._ws_thread = None
+        else:
+            self.logger.info("no active feishu WS thread to stop")
         self.logger.info("bot stopped")
 
     def _fetch_bot_open_id(self) -> str | None:
@@ -2317,10 +2454,26 @@ class FeishuChannel(BaseChannel):
     def _on_message_sync(self, data: Any) -> None:
         """
         Sync handler for incoming messages (called from WebSocket thread).
-        Schedules async handling in the main event loop.
+        Schedules async handling in the main event loop; scheduling failures are
+        logged instead of silently dropping the message.
         """
-        if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._on_message(data), self._loop)
+        self._ws_last_receive_ts = time.monotonic()
+        if self._loop is None:
+            self.logger.warning("dropping feishu message: main event loop not initialized")
+            return
+        if not self._loop.is_running():
+            self.logger.warning("dropping feishu message: main event loop not running")
+            return
+        try:
+            coro = self._on_message(data)
+        except Exception as exc:
+            self.logger.error("failed to build feishu message handler: %s", exc)
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(coro, self._loop)
+        except Exception as exc:
+            coro.close()  # avoid "coroutine was never awaited" noise / resource leak
+            self.logger.error("failed to schedule feishu message on main event loop: %s", exc)
 
     async def _on_message(self, data: P2ImMessageReceiveV1) -> None:
         """Handle incoming message from Feishu."""

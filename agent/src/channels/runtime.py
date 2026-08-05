@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class ChannelRuntimeConfig:
     """Runtime controls for IM channel processing."""
 
-    reply_timeout_s: float = 600.0
+    reply_timeout_s: float = 900.0
     poll_interval_s: float = 0.25
 
 
@@ -40,7 +40,7 @@ class ChannelRuntime:
         session_service: Any,
         manager: ChannelManager | None,
         session_map_path: Path | None = None,
-        reply_timeout_s: float = 600.0,
+        reply_timeout_s: float = 900.0,
         poll_interval_s: float = 0.25,
         operators: Iterable[str] | None = None,
         channel_operators: Mapping[str, Iterable[str]] | None = None,
@@ -220,21 +220,24 @@ class ChannelRuntime:
 
     async def _wait_for_reply(self, session_id: str, attempt_id: str | None) -> Message:
         deadline = time.monotonic() + self.config.reply_timeout_s
-        last_assistant: Message | None = None
         while time.monotonic() < deadline:
             messages = self.session_service.get_messages(session_id, limit=200)
             for message in reversed(messages):
                 if message.role != "assistant":
                     continue
                 if attempt_id and message.linked_attempt_id != attempt_id:
-                    if last_assistant is None:
-                        last_assistant = message
                     continue
                 return message
             await asyncio.sleep(self.config.poll_interval_s)
-        if last_assistant is not None:
-            return last_assistant
-        raise TimeoutError("timed out waiting for assistant reply")
+        return Message(
+            session_id=session_id,
+            role="assistant",
+            content=(
+                "⏳ 任务仍在后台处理中，结果生成后将显示在会话历史中，"
+                "请稍后刷新查看。"
+            ),
+            linked_attempt_id=attempt_id,
+        )
 
     def _load_session_map(self) -> dict[str, str]:
         try:

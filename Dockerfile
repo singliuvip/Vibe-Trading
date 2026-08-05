@@ -29,7 +29,7 @@ RUN python -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 # Chinese mirror for pip to avoid timeout when accessing files.pythonhosted.org
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG PIP_DEFAULT_TIMEOUT=120
 
 WORKDIR /app
@@ -59,10 +59,10 @@ LABEL org.opencontainers.image.title="Vibe-Trading" \
     org.opencontainers.image.licenses="MIT"
 
 # Mirror overrides for regions with slow access to defaults.
-#   DEBIAN_MIRROR: e.g. mirrors.tuna.tsinghua.edu.cn (omit protocol/slash)
-#   PIP_INDEX_URL: e.g. https://pypi.tuna.tsinghua.edu.cn/simple
-ARG DEBIAN_MIRROR=mirrors.tuna.tsinghua.edu.cn
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+#   DEBIAN_MIRROR: e.g. mirrors.aliyun.com (omit protocol/slash)
+#   PIP_INDEX_URL: e.g. https://mirrors.aliyun.com/pypi/simple/
+ARG DEBIAN_MIRROR=mirrors.aliyun.com
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG PIP_DEFAULT_TIMEOUT=120
 
 WORKDIR /app
